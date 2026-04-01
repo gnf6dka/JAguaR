@@ -1,0 +1,59 @@
+{
+  "name": "electron-dnd-json-tool",
+  "version": "1.0.0",
+  "description": "Portable JSON Tool using Electron + React + Vite",
+  "author": "Jiri Kumprecht",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently \"vite\" \"npx cross-env NODE_ENV=development electron .\"",
+    "build": "vite build",
+    "start": "electron .",
+    "dist": "npx cross-env ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --win portable --x64 --publish never",
+    "release": "npm run build && npm run dist"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.10",
+    "electron-store": "^8.1.0",
+    "fs-extra": "^11.2.0",
+    "lodash": "^4.17.21",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-dropzone": "^14.2.3",
+    "zustand": "^4.5.2"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
+    "concurrently": "^8.2.2",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.6.0",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.0"
+  },
+  "build": {
+    "appId": "cz.gnf6dka.json-tool",
+    "productName": "JSON Tool",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "JAguaR.exe"
+    }
+  }
+}

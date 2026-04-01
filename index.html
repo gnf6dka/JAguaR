@@ -1,0 +1,62 @@
+
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>JAguaR</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: "Segoe UI", sans-serif;
+        background: #f3f6ff;
+      }
+
+      #root {
+        min-height: 100vh;
+      }
+
+      .boot-loader {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+      }
+
+      .boot-card {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 16px;
+        border-radius: 12px;
+        border: 1px solid #d6dff5;
+        background: #ffffff;
+        color: #1f2d4f;
+      }
+
+      .boot-spinner {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        border: 2px solid #cbd8fb;
+        border-top-color: #4f74f3;
+        animation: boot-spin 0.85s linear infinite;
+      }
+
+      @keyframes boot-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div class="boot-loader">
+        <div class="boot-card">
+          <div class="boot-spinner" aria-hidden="true"></div>
+          <div>Nacitani rozhrani...</div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
