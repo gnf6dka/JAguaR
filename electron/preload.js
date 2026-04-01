@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('api', {
     return typeof filePath === 'string' && filePath.trim() ? filePath : null
   },
   pickManifestFile: () => ipcRenderer.invoke('manifest:pickFile'),
+  pickManifestFolder: () => ipcRenderer.invoke('manifest:pickFolder'),
   getThemeMode: () => ipcRenderer.invoke('theme:get'),
   setThemeMode: (mode) => ipcRenderer.invoke('theme:set', mode),
   toggleThemeMode: () => ipcRenderer.invoke('theme:toggle'),
@@ -34,6 +35,7 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('app:reset', wrappedListener)
   },
   loadManifestFile: (filePath) => ipcRenderer.invoke('manifest:load', filePath),
+  loadManifestFolder: (folderPath) => ipcRenderer.invoke('manifest:loadFolder', folderPath),
   syncZipManifest: (payload) => ipcRenderer.invoke('manifest:syncOuterWithInner', payload),
   saveManifestFile: (payload) => ipcRenderer.invoke('manifest:save', payload),
   exportManifestFile: (payload) => ipcRenderer.invoke('manifest:export', payload)

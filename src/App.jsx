@@ -82,7 +82,7 @@ const trailPresets = {
   }
 }
 
-const initialStatusText = 'Očekáván JAR nebo ZIP soubor.'
+const initialStatusText = 'Očekáván JAR nebo ZIP soubor nebo složka.'
 
 function TrailLayer({ trails }) {
   return (
@@ -133,6 +133,7 @@ function App() {
   const [busy, setBusy] = useState(false)
   const [saveBusy, setSaveBusy] = useState(false)
   const [exportBusy, setExportBusy] = useState(false)
+  const [isFolderDragActive, setIsFolderDragActive] = useState(false)
   const [trails, setTrails] = useState([])
   const trailIdRef = useRef(0)
   const trailTimeoutsRef = useRef([])
@@ -335,8 +336,97 @@ function App() {
     [isDragActive, theme]
   )
 
+  const folderPanelStyle = useMemo(
+    () => ({
+      ...basePanelStyle,
+      borderColor: isFolderDragActive ? theme.panelBorderActive : theme.panelBorder,
+      background: isFolderDragActive ? theme.panelBgActive : theme.panelBg
+    }),
+    [isFolderDragActive, theme]
+  )
+
+  const loadFolderFromPath = useCallback(async (folderPath) => {
+    setBusy(true)
+    setError('')
+    try {
+      if (!folderPath) {
+        const pickedPath = await window.api.pickManifestFolder()
+        if (!pickedPath) {
+          setStatus('Slozka nebyla vybrana.')
+          return
+        }
+        folderPath = pickedPath
+      }
+
+      const loaded = await window.api.loadManifestFolder(folderPath)
+      setMeta(loaded)
+      setEditorText(loaded.editorText)
+      setNeedsValidation(false)
+      setStatus(loaded.message)
+      spawnTrails('load')
+    } catch (err) {
+      setMeta(null)
+      setEditorText('')
+      setError(err?.message || 'Nacteni slozky selhalo.')
+    } finally {
+      setBusy(false)
+      setIsFolderDragActive(false)
+    }
+  }, [spawnTrails])
+
+  const onFolderPanelClick = useCallback(() => {
+    if (busy) {
+      return
+    }
+    loadFolderFromPath(null)
+  }, [busy, loadFolderFromPath])
+
+  const onFolderDragEnter = useCallback((event) => {
+    event.preventDefault()
+    if (!busy) {
+      setIsFolderDragActive(true)
+    }
+  }, [busy])
+
+  const onFolderDragOver = useCallback((event) => {
+    event.preventDefault()
+    if (!busy) {
+      setIsFolderDragActive(true)
+    }
+  }, [busy])
+
+  const onFolderDragLeave = useCallback((event) => {
+    event.preventDefault()
+    const nextTarget = event.relatedTarget
+    if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
+      setIsFolderDragActive(false)
+    }
+  }, [])
+
+  const onFolderDrop = useCallback((event) => {
+    event.preventDefault()
+    event.stopPropagation()
+
+    if (busy) {
+      setIsFolderDragActive(false)
+      return
+    }
+
+    const droppedPath = resolveDropFilePath(Array.from(event?.dataTransfer?.files || []), event)
+    if (!droppedPath) {
+      setStatus('Slozka nebyla nactena.')
+      setError('Pri pretazeni se nepodarilo zjistit cesta ke slozce. Zkuste pretahnout z Pruzkumnika znovu.')
+      setIsFolderDragActive(false)
+      return
+    }
+
+    loadFolderFromPath(droppedPath)
+  }, [busy, loadFolderFromPath, resolveDropFilePath])
+
+  const isZipLikeMeta = meta?.kind === 'zip' || meta?.kind === 'folder'
+
   const onSync = useCallback(async (direction) => {
-    if (!meta || meta.kind !== 'zip') {
+    if (!meta || (meta.kind !== 'zip' && meta.kind !== 'folder')) {
       return
     }
 
@@ -461,11 +551,31 @@ function App() {
       <div style={{ maxWidth: 980, margin: '0 auto', padding: 24, fontFamily: 'Segoe UI, sans-serif', color: theme.text, position: 'relative', zIndex: 1 }}>
         
         {/* <h1 style={{ marginTop: 0 }}>JAR Manifest Editor</h1> */}
-        <div {...getRootProps()} style={panelStyle}>
-        <input {...getInputProps()} />
-        <p style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Vyberte JAR nebo ZIP soubor</p>
-        {/* <p style={{ margin: '8px 0 0', fontSize: 14 }}>ZIP: najde se externí manifest + manifest uvnitř JAR a porovnají se.</p> */}
-      </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12 }}>
+          <div {...getRootProps()} style={panelStyle}>
+            <input {...getInputProps()} />
+            <p style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Vyberte JAR nebo ZIP soubor</p>
+          </div>
+
+          <div
+            role='button'
+            tabIndex={0}
+            onClick={onFolderPanelClick}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                onFolderPanelClick()
+              }
+            }}
+            onDragEnter={onFolderDragEnter}
+            onDragOver={onFolderDragOver}
+            onDragLeave={onFolderDragLeave}
+            onDrop={onFolderDrop}
+            style={folderPanelStyle}
+          >
+            <p style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Vyberte složku</p>
+          </div>
+        </div>
 
       <div style={{ marginTop: 16, padding: 12, borderRadius: 10, background: theme.statusBg, border: `1px solid ${theme.statusBorder}` }}>
         <strong>Stav:</strong>{' '}
@@ -495,10 +605,10 @@ function App() {
       {meta && (
         <div style={{ marginTop: 16, display: 'grid', gap: 12 }}>
           <div style={{ fontSize: 14 }}>
-            <div><strong>Soubor:</strong> {meta.filePath}</div>
+            <div><strong>{meta.kind === 'folder' ? 'Složka:' : 'Soubor:'}</strong> {meta.filePath}</div>
             {/* <div><strong>Typ:</strong> {meta.kind.toUpperCase()}</div> */}
-            <div><strong>Vnitřní manifest (relativní cesta):</strong> {meta.innerManifestEntryName || 'N/A'}</div>
-            {meta.kind === 'zip' && (
+            <div><strong>Vnitřní manifest (relativní cesta):</strong> {meta.innerManifestDisplayPath || meta.innerManifestEntryName || 'N/A'}</div>
+            {isZipLikeMeta && (
               <div>
                 <strong>Vnější manifest (relativní cesta):</strong>{' '}
                 {meta.outerManifestEntryName
@@ -508,7 +618,7 @@ function App() {
             )}
           </div>
 
-          {meta.kind === 'zip' && meta.needsSync && (
+          {isZipLikeMeta && meta.needsSync && (
             <div style={{ padding: 12, borderRadius: 10, background: theme.mismatchBg, border: `1px solid ${theme.mismatchBorder}` }}>
               <div style={{ marginBottom: 8 }}>
                 Externí manifest a vnitřní JAR manifest nejsou shodné.

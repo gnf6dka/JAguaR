@@ -155,6 +155,103 @@ function loadJarManifest(jarBufferOrPath, contextLabel) {
   }
 }
 
+function toPosixRelative(basePath, targetPath) {
+  return path.relative(basePath, targetPath).split(path.sep).join('/')
+}
+
+async function collectFilesRecursive(rootDir) {
+  const files = []
+  const stack = [rootDir]
+
+  while (stack.length > 0) {
+    const currentDir = stack.pop()
+    // eslint-disable-next-line no-await-in-loop
+    const entries = await fs.readdir(currentDir, { withFileTypes: true })
+
+    for (const entry of entries) {
+      const nextPath = path.join(currentDir, entry.name)
+      if (entry.isDirectory()) {
+        stack.push(nextPath)
+      } else if (entry.isFile()) {
+        files.push(nextPath)
+      }
+    }
+  }
+
+  files.sort((a, b) => a.localeCompare(b))
+  return files
+}
+
+async function loadFolderManifest(folderPath) {
+  const stats = await fs.stat(folderPath).catch(() => null)
+  if (!stats || !stats.isDirectory()) {
+    throw new Error('Zadana cesta neni slozka.')
+  }
+
+  const allFiles = await collectFilesRecursive(folderPath)
+  const jarFiles = allFiles.filter((file) => file.toLowerCase().endsWith('.jar'))
+
+  if (!jarFiles.length) {
+    throw new Error('Slozka neobsahuje zadne JAR.')
+  }
+
+  const jarFilePath = jarFiles[0]
+  const outerManifestFiles = allFiles.filter((file) => path.basename(file).toLowerCase() === 'manifest.json')
+
+  if (outerManifestFiles.length > 1) {
+    throw new Error(
+      `Ve slozce bylo nalezeno vice externich manifestu (${outerManifestFiles.length}). Pokracovat lze pouze s jednim externim manifestem.`
+    )
+  }
+
+  const outerManifestFilePath = outerManifestFiles[0] || null
+  const { manifestEntry: innerManifestEntry, normalizedText: innerManifestText, parsed: innerParsed } = loadJarManifest(
+    jarFilePath,
+    'SLOZKA/JAR'
+  )
+
+  if (!outerManifestFilePath) {
+    return {
+      kind: 'folder',
+      filePath: folderPath,
+      editorText: innerManifestText,
+      innerManifestText,
+      outerManifestText: null,
+      outerManifestEntryName: null,
+      outerManifestFilePath: null,
+      jarEntryName: toPosixRelative(folderPath, jarFilePath),
+      jarFilePath,
+      innerManifestEntryName: innerManifestEntry.entryName,
+      innerManifestDisplayPath: `${toPosixRelative(folderPath, jarFilePath)} > ${innerManifestEntry.entryName}`,
+      needsSync: false,
+      message: 'Externi manifest nebyl nalezen. Upravit lze pouze vnitrni manifest v JAR.'
+    }
+  }
+
+  const outerManifestRaw = await fs.readFile(outerManifestFilePath, 'utf8')
+  const outerManifestText = normalizeJsonText(outerManifestRaw, 'SLOZKA/outer manifest')
+  const outerParsed = JSON.parse(outerManifestText)
+  const manifestsEqual = isEqual(outerParsed, innerParsed)
+
+  return {
+    kind: 'folder',
+    filePath: folderPath,
+    editorText: innerManifestText,
+    innerManifestText,
+    outerManifestText,
+    outerManifestEntryName: toPosixRelative(folderPath, outerManifestFilePath),
+    outerManifestFilePath,
+    jarEntryName: toPosixRelative(folderPath, jarFilePath),
+    jarFilePath,
+    innerManifestEntryName: innerManifestEntry.entryName,
+    innerManifestDisplayPath: `${toPosixRelative(folderPath, jarFilePath)} > ${innerManifestEntry.entryName}`,
+    needsSync: !manifestsEqual,
+    message: manifestsEqual
+      ? 'Oba manifesty (vnější + vnitřní v JARku) jsou shodné.'
+      : 'Manifesty nejsou shodné. Vyberte, kterou podobu zachovat.'
+  }
+}
+
 async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -224,6 +321,19 @@ app.whenReady().then(() => {
     return result.filePaths[0]
   })
 
+  ipcMain.handle('manifest:pickFolder', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Vyberte slozku s rozbalenym obsahem',
+      properties: ['openDirectory']
+    })
+
+    if (result.canceled || !result.filePaths?.length) {
+      return null
+    }
+
+    return result.filePaths[0]
+  })
+
   ipcMain.handle('manifest:load', async (_event, filePath) => {
     if (!filePath || typeof filePath !== 'string') {
       throw new Error('Neni zadana cesta k souboru.')
@@ -243,6 +353,7 @@ app.whenReady().then(() => {
         outerManifestEntryName: null,
         jarEntryName: null,
         innerManifestEntryName: manifestEntry.entryName,
+        innerManifestDisplayPath: manifestEntry.entryName,
         needsSync: false,
         message: 'Nacten manifest.json z JAR.'
       }
@@ -282,6 +393,7 @@ app.whenReady().then(() => {
           outerManifestEntryName: null,
           jarEntryName: jarEntry.entryName,
           innerManifestEntryName: innerManifestEntry.entryName,
+          innerManifestDisplayPath: `${jarEntry.entryName} > ${innerManifestEntry.entryName}`,
           needsSync: false,
           message: 'Externi manifest nebyl nalezen. Upravit lze pouze vnitrni manifest v JAR.'
         }
@@ -300,6 +412,7 @@ app.whenReady().then(() => {
         outerManifestEntryName: outerManifestEntry.entryName,
         jarEntryName: jarEntry.entryName,
         innerManifestEntryName: innerManifestEntry.entryName,
+        innerManifestDisplayPath: `${jarEntry.entryName} > ${innerManifestEntry.entryName}`,
         needsSync: !manifestsEqual,
         message: manifestsEqual
           ? 'Oba manifesty (vnější + vnitřní v JARku) jsou shodné.'
@@ -310,19 +423,66 @@ app.whenReady().then(() => {
     throw new Error('Podporovane jsou pouze soubory .jar nebo .zip')
   })
 
-  ipcMain.handle('manifest:syncOuterWithInner', async (_event, payload) => {
-    if (!payload || payload.kind !== 'zip') {
-      throw new Error('Synchronizace je dostupna pouze pro ZIP.')
+  ipcMain.handle('manifest:loadFolder', async (_event, folderPath) => {
+    if (!folderPath || typeof folderPath !== 'string') {
+      throw new Error('Neni zadana cesta ke slozce.')
     }
 
-    const { filePath, jarEntryName, innerManifestEntryName, outerManifestEntryName } = payload
-    const direction = payload.direction || 'inner-to-outer'
-    if (!filePath || !jarEntryName || !innerManifestEntryName || !outerManifestEntryName) {
-      throw new Error('Chybi data potrebna pro synchronizaci ZIP.')
+    return loadFolderManifest(folderPath)
+  })
+
+  ipcMain.handle('manifest:syncOuterWithInner', async (_event, payload) => {
+    if (!payload || (payload.kind !== 'zip' && payload.kind !== 'folder')) {
+      throw new Error('Synchronizace je dostupna pouze pro ZIP nebo slozku.')
     }
+
+    const direction = payload.direction || 'inner-to-outer'
 
     if (direction !== 'inner-to-outer' && direction !== 'outer-to-inner') {
       throw new Error('Neznama volba synchronizace.')
+    }
+
+    if (payload.kind === 'folder') {
+      const { jarFilePath, innerManifestEntryName, outerManifestFilePath } = payload
+      if (!jarFilePath || !innerManifestEntryName || !outerManifestFilePath) {
+        throw new Error('Chybi data potrebna pro synchronizaci slozky.')
+      }
+
+      const innerJar = new AdmZip(jarFilePath)
+      const innerManifestEntry = innerJar.getEntry(innerManifestEntryName)
+      if (!innerManifestEntry) {
+        throw new Error('Vnitrni manifest.json nebyl nalezen v JAR.')
+      }
+
+      const innerManifestText = normalizeJsonText(innerManifestEntry.getData().toString('utf8'), 'SLOZKA/JAR manifest')
+      const outerManifestRaw = await fs.readFile(outerManifestFilePath, 'utf8')
+      const outerManifestText = normalizeJsonText(outerManifestRaw, 'SLOZKA/outer manifest')
+
+      let syncedText
+      if (direction === 'inner-to-outer') {
+        syncedText = innerManifestText
+        await fs.writeFile(outerManifestFilePath, syncedText, 'utf8')
+      } else {
+        syncedText = outerManifestText
+        innerJar.updateFile(innerManifestEntryName, Buffer.from(syncedText, 'utf8'))
+        innerJar.writeZip(jarFilePath)
+      }
+
+      return {
+        ok: true,
+        syncedText,
+        innerManifestText: syncedText,
+        outerManifestText: syncedText,
+        message:
+          direction === 'inner-to-outer'
+            ? 'Synchronizace dokoncena. Zachovana vnitrni podoba a prekopirovana do vnejsiho manifestu.'
+            : 'Synchronizace dokoncena. Zachovana vnejsi podoba a prekopirovana do vnitrniho JAR manifestu.'
+      }
+    }
+
+    const { filePath, jarEntryName, innerManifestEntryName, outerManifestEntryName } = payload
+    if (!filePath || !jarEntryName || !innerManifestEntryName || !outerManifestEntryName) {
+      throw new Error('Chybi data potrebna pro synchronizaci ZIP.')
     }
 
     const zip = new AdmZip(filePath)
@@ -418,6 +578,33 @@ app.whenReady().then(() => {
         ok: true,
         normalizedText,
         message: saveMessage
+      }
+    }
+
+    if (payload.kind === 'folder') {
+      if (!payload.jarFilePath || !payload.innerManifestEntryName) {
+        throw new Error('Neplatna data slozky pro ulozeni.')
+      }
+
+      const innerJar = new AdmZip(payload.jarFilePath)
+      const innerManifestEntry = innerJar.getEntry(payload.innerManifestEntryName)
+      if (!innerManifestEntry) {
+        throw new Error('Ve vnitrnim JAR nelze najit manifest pro ulozeni.')
+      }
+
+      innerJar.updateFile(payload.innerManifestEntryName, manifestBuffer)
+      innerJar.writeZip(payload.jarFilePath)
+
+      if (payload.outerManifestFilePath) {
+        await fs.writeFile(payload.outerManifestFilePath, normalizedText, 'utf8')
+      }
+
+      return {
+        ok: true,
+        normalizedText,
+        message: payload.outerManifestFilePath
+          ? 'Oba manifesty byly úspěšně uloženy.'
+          : 'Vnitrni JAR manifest byl úspěšně uložen.'
       }
     }
 
