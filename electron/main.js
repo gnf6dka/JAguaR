@@ -307,7 +307,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle('manifest:pickFile', async () => {
     const result = await dialog.showOpenDialog({
-      title: 'Vyberte JAR nebo ZIP soubor',
+      title: 'Vyberte soubor (JAR, ZIP)',
       properties: ['openFile'],
       filters: [
         { name: 'JAR/ZIP', extensions: ['jar', 'zip'] }

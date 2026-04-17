@@ -1,6 +1,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useDropzone } from 'react-dropzone'
+import packageJson from '../package.json'
 
 const basePanelStyle = {
   borderRadius: 14,
@@ -82,7 +83,8 @@ const trailPresets = {
   }
 }
 
-const initialStatusText = 'Očekáván JAR nebo ZIP soubor nebo složka.'
+const initialStatusText = 'Očekáván JAR, ZIP nebo složka.'
+const appVersion = packageJson.version
 
 function TrailLayer({ trails }) {
   return (
@@ -554,7 +556,7 @@ function App() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12 }}>
           <div {...getRootProps()} style={panelStyle}>
             <input {...getInputProps()} />
-            <p style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Vyberte JAR nebo ZIP soubor</p>
+            <p style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Vyberte soubor (JAR, ZIP)</p>
           </div>
 
           <div
@@ -774,9 +776,22 @@ function App() {
 
       {!meta && (
         <p style={{ marginTop: 14, fontSize: 14, color: theme.mutedText }}>
-          Po načtení souboru se zobrazí vnitřní manifest.json z JAR a bude možné jej upravit a uložit.
+          Zobrazí se manifest aplikace a bude možné jej upravit, uložit, exportovat.
         </p>
       )}
+
+      <footer
+        style={{
+          marginTop: 24,
+          paddingTop: 12,
+          borderTop: `1px solid ${theme.statusBorder}`,
+          fontSize: 12,
+          color: theme.mutedText,
+          textAlign: 'right'
+        }}
+      >
+        Verze aplikace: {appVersion}, Author: gnf6dka
+      </footer>
       </div>
     </div>
   )

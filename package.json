@@ -1,5 +1,5 @@
 {
-  "name": "electron-dnd-json-tool",
+  "name": "electron-manifest-json-tool",
   "version": "1.0.0",
   "description": "Portable JSON Tool using Electron + React + Vite",
   "author": "Jiri Kumprecht",
