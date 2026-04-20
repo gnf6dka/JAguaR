@@ -86,6 +86,57 @@ const trailPresets = {
 const initialStatusText = 'Očekáván JAR, ZIP nebo složka.'
 const appVersion = packageJson.version
 
+function formatFlagPath(pathParts) {
+  return pathParts.reduce((label, part, index) => {
+    if (typeof part === 'number') {
+      return `${label}[${part}]`
+    }
+
+    if (index === 0) {
+      return part
+    }
+
+    return `${label}.${part}`
+  }, '')
+}
+
+function collectBooleanFlags(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return []
+  }
+
+  return Object.entries(value)
+    .filter(([, nestedValue]) => typeof nestedValue === 'boolean')
+    .map(([key, nestedValue]) => ({
+      path: [key],
+      label: formatFlagPath([key]),
+      value: nestedValue
+    }))
+}
+
+function setValueAtPath(value, pathParts, nextValue) {
+  if (!pathParts.length) {
+    return nextValue
+  }
+
+  const [currentPart, ...restPath] = pathParts
+
+  if (Array.isArray(value)) {
+    return value.map((item, index) => (
+      index === currentPart ? setValueAtPath(item, restPath, nextValue) : item
+    ))
+  }
+
+  if (value && typeof value === 'object') {
+    return {
+      ...value,
+      [currentPart]: setValueAtPath(value[currentPart], restPath, nextValue)
+    }
+  }
+
+  return value
+}
+
 function TrailLayer({ trails }) {
   return (
     <>
@@ -129,7 +180,6 @@ function App() {
   })
   const [meta, setMeta] = useState(null)
   const [editorText, setEditorText] = useState('')
-  const [needsValidation, setNeedsValidation] = useState(false)
   const [status, setStatus] = useState(initialStatusText)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -208,7 +258,6 @@ function App() {
       setTrails([])
       setMeta(null)
       setEditorText('')
-      setNeedsValidation(false)
       setStatus(initialStatusText)
       setError('')
       setBusy(false)
@@ -235,11 +284,10 @@ function App() {
     .toLowerCase()
     .trim()
   const isSavedSuccessStatus =
-    normalizedStatus === 'oba manifesty byly uspesne ulozeny.' ||
-    normalizedStatus === 'jar byl uspesne ulozen.' ||
-    normalizedStatus === 'vnitrni jar manifest byl uspesne ulozen.'
-  const isExportSuccessStatus = normalizedStatus.startsWith('manifest byl vyexportovan do ')
-  const isValidationSuccessStatus = normalizedStatus === 'validace json: v poradku.'
+    normalizedStatus === 'oba manifesty byly úspěšně uloženy.' ||
+    normalizedStatus === 'jar byl úspěšně uložen.' ||
+    normalizedStatus === 'vnitřní jar manifest byl úspěšně uložen.'
+  const isExportSuccessStatus = normalizedStatus.startsWith('manifest byl vyexportován do ')
   const isValidationFailureStatus = normalizedStatus.startsWith('validace json selhala: ')
 
   const resolveDropFilePath = useCallback((files, event) => {
@@ -275,8 +323,8 @@ function App() {
       if (rejections?.length) {
         const first = rejections[0]
         const fileName = first?.file?.name || 'Soubor'
-        const reason = first?.errors?.[0]?.message || 'Nepodporovany typ souboru.'
-        setStatus('Soubor nebyl nacten.')
+        const reason = first?.errors?.[0]?.message || 'Nepodporovaný typ souboru.'
+        setStatus('Soubor nebyl načten.')
         setError(`${fileName}: ${reason}`)
       }
       return
@@ -286,8 +334,8 @@ function App() {
     const isDropEvent = event?.type === 'drop'
 
     if (!filePath && isDropEvent) {
-      setStatus('Soubor nebyl nacten.')
-      setError('Pri pretazeni se nepodarilo zjistit cesta k souboru. Zkuste pretahnout z Pruzkumnika znovu.')
+      setStatus('Soubor nebyl načten.')
+      setError('Při přetažení se nepodařilo zjistit cestu k souboru. Zkuste přetáhnout z Průzkumníka znovu.')
       return
     }
 
@@ -298,20 +346,19 @@ function App() {
       }
 
       if (!filePath) {
-        setStatus('Soubor nebyl vybran.')
+        setStatus('Soubor nebyl vybrán.')
         return
       }
 
       const loaded = await window.api.loadManifestFile(filePath)
       setMeta(loaded)
       setEditorText(loaded.editorText)
-      setNeedsValidation(false)
       setStatus(loaded.message)
       spawnTrails('load')
     } catch (err) {
       setMeta(null)
       setEditorText('')
-      setError(err?.message || 'Nacteni selhalo.')
+      setError(err?.message || 'Načtení selhalo.')
     } finally {
       setBusy(false)
     }
@@ -347,6 +394,32 @@ function App() {
     [isFolderDragActive, theme]
   )
 
+  const parsedEditorState = useMemo(() => {
+    try {
+      const parsed = JSON.parse(editorText)
+      const isStructured = parsed !== null && typeof parsed === 'object'
+      return {
+        parsed,
+        isStructured,
+        error: null
+      }
+    } catch (parseError) {
+      return {
+        parsed: null,
+        isStructured: false,
+        error: parseError
+      }
+    }
+  }, [editorText])
+
+  const booleanFlags = useMemo(() => {
+    if (!parsedEditorState.isStructured) {
+      return []
+    }
+
+    return collectBooleanFlags(parsedEditorState.parsed)
+  }, [parsedEditorState])
+
   const loadFolderFromPath = useCallback(async (folderPath) => {
     setBusy(true)
     setError('')
@@ -354,7 +427,7 @@ function App() {
       if (!folderPath) {
         const pickedPath = await window.api.pickManifestFolder()
         if (!pickedPath) {
-          setStatus('Slozka nebyla vybrana.')
+          setStatus('Složka nebyla vybrána.')
           return
         }
         folderPath = pickedPath
@@ -363,13 +436,12 @@ function App() {
       const loaded = await window.api.loadManifestFolder(folderPath)
       setMeta(loaded)
       setEditorText(loaded.editorText)
-      setNeedsValidation(false)
       setStatus(loaded.message)
       spawnTrails('load')
     } catch (err) {
       setMeta(null)
       setEditorText('')
-      setError(err?.message || 'Nacteni slozky selhalo.')
+      setError(err?.message || 'Načtení složky selhalo.')
     } finally {
       setBusy(false)
       setIsFolderDragActive(false)
@@ -416,8 +488,8 @@ function App() {
 
     const droppedPath = resolveDropFilePath(Array.from(event?.dataTransfer?.files || []), event)
     if (!droppedPath) {
-      setStatus('Slozka nebyla nactena.')
-      setError('Pri pretazeni se nepodarilo zjistit cesta ke slozce. Zkuste pretahnout z Pruzkumnika znovu.')
+      setStatus('Složka nebyla načtena.')
+      setError('Při přetažení se nepodařilo zjistit cestu ke složce. Zkuste přetáhnout z Průzkumníka znovu.')
       setIsFolderDragActive(false)
       return
     }
@@ -497,12 +569,12 @@ function App() {
       })
 
       if (result?.canceled) {
-        setStatus(result.message || 'Export byl zrusen.')
+        setStatus(result.message || 'Export byl zrušen.')
         return
       }
 
       setEditorText(result.normalizedText)
-      setStatus(result.message || 'Manifest byl vyexportovan.')
+      setStatus(result.message || 'Manifest byl vyexportován.')
       spawnTrails('save')
     } catch (err) {
       setError(err?.message || 'Export selhal.')
@@ -512,20 +584,39 @@ function App() {
     }
   }, [editorText, meta, spawnTrails])
 
-  const onValidate = useCallback(() => {
+  const applyEditorChange = useCallback((nextText) => {
     if (!meta) {
       return
     }
 
+    setEditorText(nextText)
     setError('')
+
     try {
-      JSON.parse(editorText)
-      setNeedsValidation(false)
-      setStatus('Validace JSON: v poradku.')
+      JSON.parse(nextText)
+      setStatus('Validace JSON: v pořádku.')
     } catch (err) {
-      setStatus(`Validace JSON selhala: ${err?.message || 'Neplatny JSON.'}`)
+      setStatus(`Validace JSON selhala: ${err?.message || 'Neplatný JSON.'}`)
     }
-  }, [editorText, meta])
+  }, [meta])
+
+  const onToggleFlag = useCallback((flagPath) => {
+    if (!parsedEditorState.isStructured) {
+      return
+    }
+
+    let currentValue = parsedEditorState.parsed
+    for (const pathPart of flagPath) {
+      currentValue = currentValue?.[pathPart]
+    }
+
+    if (typeof currentValue !== 'boolean') {
+      return
+    }
+
+    const nextManifest = setValueAtPath(parsedEditorState.parsed, flagPath, !currentValue)
+    applyEditorChange(JSON.stringify(nextManifest, null, 2))
+  }, [applyEditorChange, parsedEditorState])
 
   return (
     <div
@@ -553,31 +644,33 @@ function App() {
       <div style={{ maxWidth: 980, margin: '0 auto', padding: 24, fontFamily: 'Segoe UI, sans-serif', color: theme.text, position: 'relative', zIndex: 1 }}>
         
         {/* <h1 style={{ marginTop: 0 }}>JAR Manifest Editor</h1> */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12 }}>
-          <div {...getRootProps()} style={panelStyle}>
-            <input {...getInputProps()} />
-            <p style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Vyberte soubor (JAR, ZIP)</p>
-          </div>
+        {!meta && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12 }}>
+            <div {...getRootProps()} style={panelStyle}>
+              <input {...getInputProps()} />
+              <p style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Vyberte soubor (JAR, ZIP)</p>
+            </div>
 
-          <div
-            role='button'
-            tabIndex={0}
-            onClick={onFolderPanelClick}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault()
-                onFolderPanelClick()
-              }
-            }}
-            onDragEnter={onFolderDragEnter}
-            onDragOver={onFolderDragOver}
-            onDragLeave={onFolderDragLeave}
-            onDrop={onFolderDrop}
-            style={folderPanelStyle}
-          >
-            <p style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Vyberte složku</p>
+            <div
+              role='button'
+              tabIndex={0}
+              onClick={onFolderPanelClick}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  onFolderPanelClick()
+                }
+              }}
+              onDragEnter={onFolderDragEnter}
+              onDragOver={onFolderDragOver}
+              onDragLeave={onFolderDragLeave}
+              onDrop={onFolderDrop}
+              style={folderPanelStyle}
+            >
+              <p style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Vyberte složku</p>
+            </div>
           </div>
-        </div>
+        )}
 
       <div style={{ marginTop: 16, padding: 12, borderRadius: 10, background: theme.statusBg, border: `1px solid ${theme.statusBorder}` }}>
         <strong>Stav:</strong>{' '}
@@ -587,11 +680,9 @@ function App() {
               ? { color: theme.statusSuccess, fontWeight: 700 }
               : isExportSuccessStatus
                 ? { color: theme.statusExport, fontWeight: 700 }
-                : isValidationSuccessStatus
-                  ? { color: theme.statusSuccess, fontWeight: 700 }
-                  : isValidationFailureStatus
+                : isValidationFailureStatus
                     ? { color: theme.errorText, fontWeight: 700 }
-                : undefined
+                    : undefined
           }
         >
           {status}
@@ -681,11 +772,63 @@ function App() {
             </div>
           )}
 
+          <div
+            style={{
+              padding: 14,
+              borderRadius: 10,
+              border: `1px solid ${theme.statusBorder}`,
+              background: theme.statusBg,
+              display: 'grid',
+              gap: 10
+            }}
+          >
+            {/* <div style={{ fontWeight: 700 }}>Boolean flagy z manifestu</div> */}
+
+            {parsedEditorState.error && (
+              <div style={{ color: theme.errorText }}>
+                Flagy jsou dostupné až po načtení validního JSONu.
+              </div>
+            )}
+
+            {!parsedEditorState.error && !booleanFlags.length && (
+              <div style={{ color: theme.mutedText }}>
+                V aktuálním manifestu nejsou žádné boolean hodnoty.
+              </div>
+            )}
+
+            {!!booleanFlags.length && (
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                {booleanFlags.map((flag) => (
+                  <label
+                    key={flag.label}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '8px 12px',
+                      borderRadius: 999,
+                      border: `1px solid ${theme.editorBorder}`,
+                      background: theme.editorBg,
+                      color: theme.text,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <input
+                      type='checkbox'
+                      checked={flag.value}
+                      onChange={() => onToggleFlag(flag.path)}
+                    />
+                    <span style={{ fontFamily: 'Consolas, monospace', fontSize: 13 }}>{flag.label}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
           <textarea
             value={editorText}
             onChange={(e) => {
-              setEditorText(e.target.value)
-              setNeedsValidation(true)
+              applyEditorChange(e.target.value)
             }}
             spellCheck={false}
             style={{
@@ -704,27 +847,6 @@ function App() {
           />
 
           <div style={{ display: 'flex', gap: 10 }}>
-            <button
-              onClick={onValidate}
-              disabled={busy}
-              style={{
-                padding: '10px 18px',
-                fontWeight: 600,
-                borderRadius: 10,
-                border: needsValidation ? '2px solid #e53935' : '1px solid #888888',
-                background: '#4a4a4a',
-                color: '#b0b0b0',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px'
-              }}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="20 6 9 17 4 12"></polyline>
-              </svg>
-              Kontrola
-            </button>
             <button
               onClick={onSave}
               disabled={busy}
@@ -790,7 +912,7 @@ function App() {
           textAlign: 'right'
         }}
       >
-        Verze aplikace: {appVersion}, Author: gnf6dka
+        Verze aplikace: {appVersion}, Autor: gnf6dka
       </footer>
       </div>
     </div>

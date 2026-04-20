@@ -38,10 +38,12 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "jaguar.png",
       "package.json"
     ],
     "asar": true,
     "win": {
+      "icon": "jaguar.ico",
       "target": [
         {
           "target": "portable",
