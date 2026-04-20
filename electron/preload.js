@@ -38,5 +38,6 @@ contextBridge.exposeInMainWorld('api', {
   loadManifestFolder: (folderPath) => ipcRenderer.invoke('manifest:loadFolder', folderPath),
   syncZipManifest: (payload) => ipcRenderer.invoke('manifest:syncOuterWithInner', payload),
   saveManifestFile: (payload) => ipcRenderer.invoke('manifest:save', payload),
-  exportManifestFile: (payload) => ipcRenderer.invoke('manifest:export', payload)
+  exportManifestFile: (payload) => ipcRenderer.invoke('manifest:export', payload),
+  changeVersion: (payload) => ipcRenderer.invoke('jar:changeVersion', payload)
 });

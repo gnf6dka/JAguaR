@@ -191,6 +191,11 @@ function App() {
   const trailTimeoutsRef = useRef([])
   const theme = themes[themeMode]
 
+  // Version change modal: 'closed' | 'input' | 'busy' | 'result'
+  const [versionModalStep, setVersionModalStep] = useState('closed')
+  const [newVersionInput, setNewVersionInput] = useState('')
+  const [versionChangeResult, setVersionChangeResult] = useState(null)
+
   const spawnTrails = useCallback((kind) => {
     const preset = trailPresets[kind]
     if (!preset) {
@@ -618,6 +623,40 @@ function App() {
     applyEditorChange(JSON.stringify(nextManifest, null, 2))
   }, [applyEditorChange, parsedEditorState])
 
+  const currentManifestVersion = useMemo(() => {
+    if (!parsedEditorState.isStructured) return null
+    const p = parsedEditorState.parsed
+    return p?.version ?? p?.Version ?? p?.appVersion ?? null
+  }, [parsedEditorState])
+
+  const onOpenVersionModal = useCallback(() => {
+    setNewVersionInput('')
+    setVersionChangeResult(null)
+    setVersionModalStep('input')
+  }, [])
+
+  const onConfirmVersionChange = useCallback(async () => {
+    if (!meta || !newVersionInput.trim() || !currentManifestVersion) return
+
+    setVersionModalStep('busy')
+    try {
+      const result = await window.api.changeVersion({
+        ...meta,
+        oldVersion: String(currentManifestVersion),
+        newVersion: newVersionInput.trim()
+      })
+      setVersionChangeResult({ changedFiles: result.changedFiles, error: null })
+      if (result.newManifestText) {
+        setEditorText(result.newManifestText)
+      }
+      setStatus(`Verze změněna z "${currentManifestVersion}" na "${newVersionInput.trim()}".`)
+      setVersionModalStep('result')
+    } catch (err) {
+      setVersionChangeResult({ changedFiles: [], error: err?.message || 'Změna verze selhala.' })
+      setVersionModalStep('result')
+    }
+  }, [meta, newVersionInput, currentManifestVersion])
+
   return (
     <div
       style={{
@@ -892,6 +931,31 @@ function App() {
               </svg>
               {exportBusy ? 'Probíhá...' : 'Export'}
             </button>
+            <button
+              onClick={onOpenVersionModal}
+              disabled={busy}
+              style={{
+                padding: '10px 18px',
+                fontWeight: 600,
+                borderRadius: 10,
+                border: '1px solid #9b7cff',
+                background: '#2a1f4a',
+                color: '#c4a8ff',
+                cursor: busy ? 'not-allowed' : 'pointer',
+                opacity: busy ? 0.5 : 1,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="3 12 9 12"/>
+                <path d="M3 12l4-4M3 12l4 4"/>
+                <polyline points="21 12 15 12"/>
+                <path d="M21 12l-4-4M21 12l-4 4"/>
+              </svg>
+              Změnit číslo verze
+            </button>
           </div>
         </div>
       )}
@@ -912,9 +976,223 @@ function App() {
           textAlign: 'right'
         }}
       >
-        Verze aplikace: {appVersion}, Autor: gnf6dka
+        Verze aplikace: {appVersion}, Dev: gnf6dka
       </footer>
       </div>
+
+      {/* Version change modal */}
+      {versionModalStep !== 'closed' && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.65)',
+            zIndex: 1000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget && versionModalStep !== 'busy') {
+              setVersionModalStep('closed')
+            }
+          }}
+        >
+          <div
+            style={{
+              background: theme.panelBg,
+              border: `1px solid ${theme.panelBorder}`,
+              borderRadius: 14,
+              padding: 28,
+              minWidth: 400,
+              maxWidth: 580,
+              width: '90vw',
+              boxShadow: '0 12px 40px rgba(0,0,0,0.5)'
+            }}
+          >
+            {versionModalStep === 'input' && (
+              <>
+                <h2 style={{ marginTop: 0, marginBottom: 20, fontSize: 18 }}>Změnit číslo verze</h2>
+
+                {currentManifestVersion != null ? (
+                  <div style={{ marginBottom: 20 }}>
+                    <div style={{ marginBottom: 12, fontSize: 14 }}>
+                      Aktuální verze z manifestu:{' '}
+                      <code
+                        style={{
+                          padding: '2px 8px',
+                          borderRadius: 6,
+                          background: theme.editorBg,
+                          border: `1px solid ${theme.editorBorder}`,
+                          fontFamily: 'Consolas, monospace',
+                          fontSize: 13
+                        }}
+                      >
+                        {String(currentManifestVersion)}
+                      </code>
+                    </div>
+                    <label style={{ display: 'block', marginBottom: 6, fontSize: 14, fontWeight: 600 }}>
+                      Nová verze:
+                    </label>
+                    <input
+                      type="text"
+                      value={newVersionInput}
+                      onChange={(e) => setNewVersionInput(e.target.value)}
+                      placeholder="Zadejte nové číslo verze…"
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && newVersionInput.trim()) onConfirmVersionChange()
+                        if (e.key === 'Escape') setVersionModalStep('closed')
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '9px 12px',
+                        borderRadius: 8,
+                        border: `1px solid ${theme.editorBorder}`,
+                        background: theme.editorBg,
+                        color: theme.text,
+                        fontFamily: 'Consolas, monospace',
+                        fontSize: 14,
+                        boxSizing: 'border-box',
+                        outline: 'none'
+                      }}
+                    />
+                    <div style={{ marginTop: 8, fontSize: 12, color: theme.mutedText }}>
+                      Všechny výskyty řetězce &quot;{String(currentManifestVersion)}&quot; budou nahrazeny v každém souboru uvnitř JAR.
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      marginBottom: 20,
+                      padding: 12,
+                      borderRadius: 8,
+                      background: theme.errorBg,
+                      border: `1px solid ${theme.errorBorder}`,
+                      color: theme.errorText,
+                      fontSize: 14
+                    }}
+                  >
+                    Pole &quot;version&quot; nebylo nalezeno v manifestu. Změna verze není možná.
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                  <button
+                    onClick={() => setVersionModalStep('closed')}
+                    style={{
+                      padding: '8px 18px',
+                      borderRadius: 8,
+                      border: `1px solid ${theme.editorBorder}`,
+                      background: 'transparent',
+                      color: theme.text,
+                      cursor: 'pointer',
+                      fontSize: 14
+                    }}
+                  >
+                    Zrušit
+                  </button>
+                  {currentManifestVersion != null && (
+                    <button
+                      onClick={onConfirmVersionChange}
+                      disabled={!newVersionInput.trim()}
+                      style={{
+                        padding: '8px 18px',
+                        borderRadius: 8,
+                        border: `1px solid ${theme.buttonBorder}`,
+                        background: theme.buttonBg,
+                        color: theme.buttonText,
+                        fontWeight: 600,
+                        cursor: newVersionInput.trim() ? 'pointer' : 'not-allowed',
+                        opacity: newVersionInput.trim() ? 1 : 0.5,
+                        fontSize: 14
+                      }}
+                    >
+                      Potvrdit
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+
+            {versionModalStep === 'busy' && (
+              <div style={{ textAlign: 'center', padding: '24px 0', fontSize: 15, color: theme.mutedText }}>
+                Probíhá změna verze, čekejte…
+              </div>
+            )}
+
+            {versionModalStep === 'result' && versionChangeResult && (
+              <>
+                <h2 style={{ marginTop: 0, marginBottom: 20, fontSize: 18 }}>
+                  {versionChangeResult.error ? 'Chyba při změně verze' : 'Změna verze dokončena'}
+                </h2>
+
+                {versionChangeResult.error ? (
+                  <div
+                    style={{
+                      marginBottom: 20,
+                      padding: 12,
+                      borderRadius: 8,
+                      background: theme.errorBg,
+                      border: `1px solid ${theme.errorBorder}`,
+                      color: theme.errorText,
+                      fontSize: 14
+                    }}
+                  >
+                    {versionChangeResult.error}
+                  </div>
+                ) : (
+                  <div style={{ marginBottom: 20 }}>
+                    <div style={{ marginBottom: 10, fontSize: 14 }}>
+                      Změna provedena v <strong>{versionChangeResult.changedFiles.length}</strong> souboru/souborech:
+                    </div>
+                    {versionChangeResult.changedFiles.length > 0 ? (
+                      <ul
+                        style={{
+                          margin: 0,
+                          paddingLeft: 20,
+                          fontFamily: 'Consolas, monospace',
+                          fontSize: 12,
+                          lineHeight: 1.7,
+                          color: theme.mutedText,
+                          maxHeight: 260,
+                          overflowY: 'auto'
+                        }}
+                      >
+                        {versionChangeResult.changedFiles.map((f, i) => (
+                          <li key={i} style={{ color: theme.text }}>{f}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div style={{ color: theme.mutedText, fontSize: 14 }}>
+                        Žádné soubory neobsahovaly hledaný řetězec.
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <button
+                    onClick={() => setVersionModalStep('closed')}
+                    style={{
+                      padding: '8px 18px',
+                      borderRadius: 8,
+                      border: `1px solid ${theme.buttonBorder}`,
+                      background: theme.buttonBg,
+                      color: theme.buttonText,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      fontSize: 14
+                    }}
+                  >
+                    Zavřít
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

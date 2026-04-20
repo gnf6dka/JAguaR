@@ -653,6 +653,123 @@ app.whenReady().then(() => {
     }
   })
 
+  ipcMain.handle('jar:changeVersion', async (_event, payload) => {
+    const {
+      kind,
+      filePath,
+      jarFilePath,
+      jarEntryName,
+      innerManifestEntryName,
+      outerManifestFilePath,
+      outerManifestEntryName,
+      oldVersion,
+      newVersion
+    } = payload
+
+    if (!oldVersion || typeof oldVersion !== 'string' || !oldVersion.trim()) {
+      throw new Error('Chybí aktuální číslo verze.')
+    }
+    if (!newVersion || typeof newVersion !== 'string' || !newVersion.trim()) {
+      throw new Error('Chybí nové číslo verze.')
+    }
+    if (oldVersion.trim() === newVersion.trim()) {
+      throw new Error('Nová verze je shodná se stávající.')
+    }
+
+    const changedFiles = []
+
+    function replaceInBuffer(buf, displayName) {
+      // Skip binary files – null bytes are a reliable indicator of binary content
+      if (buf.indexOf(0) !== -1) return null
+      const text = buf.toString('utf8')
+      if (!text.includes(oldVersion)) return null
+      const newText = text.split(oldVersion).join(newVersion)
+      changedFiles.push(displayName)
+      return Buffer.from(newText, 'utf8')
+    }
+
+    let newManifestText = null
+
+    if (kind === 'jar') {
+      const jar = new AdmZip(filePath)
+      for (const entry of jar.getEntries()) {
+        if (entry.isDirectory) continue
+        const newBuf = replaceInBuffer(entry.getData(), entry.entryName)
+        if (newBuf) {
+          jar.updateFile(entry.entryName, newBuf)
+          if (entry.entryName === innerManifestEntryName) {
+            try { newManifestText = normalizeJsonText(newBuf.toString('utf8'), 'manifest po změně verze') } catch (_e) { /* ignore */ }
+          }
+        }
+      }
+      jar.writeZip(filePath)
+
+      if (!newManifestText) {
+        const jar2 = new AdmZip(filePath)
+        const mEntry = jar2.getEntry(innerManifestEntryName)
+        if (mEntry) {
+          try { newManifestText = normalizeJsonText(mEntry.getData().toString('utf8'), 'manifest') } catch (_e) { /* ignore */ }
+        }
+      }
+    } else if (kind === 'zip') {
+      const zip = new AdmZip(filePath)
+
+      if (outerManifestEntryName) {
+        const outerEntry = zip.getEntry(outerManifestEntryName)
+        if (outerEntry) {
+          const newBuf = replaceInBuffer(outerEntry.getData(), outerManifestEntryName)
+          if (newBuf) zip.updateFile(outerManifestEntryName, newBuf)
+        }
+      }
+
+      const jarEntry = zip.getEntry(jarEntryName)
+      if (!jarEntry) throw new Error('V ZIP nelze najít JAR.')
+
+      const innerJar = new AdmZip(jarEntry.getData())
+      for (const entry of innerJar.getEntries()) {
+        if (entry.isDirectory) continue
+        const displayName = `${jarEntryName} > ${entry.entryName}`
+        const newBuf = replaceInBuffer(entry.getData(), displayName)
+        if (newBuf) {
+          innerJar.updateFile(entry.entryName, newBuf)
+          if (entry.entryName === innerManifestEntryName) {
+            try { newManifestText = normalizeJsonText(newBuf.toString('utf8'), 'manifest po změně verze') } catch (_e) { /* ignore */ }
+          }
+        }
+      }
+
+      zip.updateFile(jarEntryName, innerJar.toBuffer())
+      zip.writeZip(filePath)
+    } else if (kind === 'folder') {
+      if (outerManifestFilePath) {
+        const raw = await fs.readFile(outerManifestFilePath, 'utf8')
+        if (raw.includes(oldVersion)) {
+          const newText = raw.split(oldVersion).join(newVersion)
+          await fs.writeFile(outerManifestFilePath, newText, 'utf8')
+          changedFiles.push(outerManifestFilePath)
+        }
+      }
+
+      const targetJarPath = jarFilePath
+      const innerJar = new AdmZip(targetJarPath)
+      for (const entry of innerJar.getEntries()) {
+        if (entry.isDirectory) continue
+        const newBuf = replaceInBuffer(entry.getData(), entry.entryName)
+        if (newBuf) {
+          innerJar.updateFile(entry.entryName, newBuf)
+          if (entry.entryName === innerManifestEntryName) {
+            try { newManifestText = normalizeJsonText(newBuf.toString('utf8'), 'manifest po změně verze') } catch (_e) { /* ignore */ }
+          }
+        }
+      }
+      innerJar.writeZip(targetJarPath)
+    } else {
+      throw new Error('Neznámý typ souboru pro změnu verze.')
+    }
+
+    return { ok: true, changedFiles, newManifestText }
+  })
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
