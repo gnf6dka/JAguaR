@@ -342,6 +342,42 @@ function App() {
     }
   }, [spawnTrails])
 
+  const loadFileFromPath = useCallback(async (filePath) => {
+    setBusy(true)
+    setError('')
+    try {
+      if (!filePath) {
+        const pickedPath = await window.api.pickManifestFile()
+        if (!pickedPath) {
+          setStatus('Soubor nebyl vybrán.')
+          return
+        }
+        filePath = pickedPath
+      }
+
+      const loaded = await window.api.loadManifestFile(filePath)
+      setMeta(loaded)
+      setEditorText(loaded.editorText)
+      setStatus(loaded.message)
+      spawnTrails('load')
+    } catch (err) {
+      setMeta(null)
+      setEditorText('')
+      setError(err?.message || 'Načtení selhalo.')
+    } finally {
+      setBusy(false)
+      setIsFileDragActive(false)
+    }
+  }, [spawnTrails])
+
+  const onFilePanelClick = useCallback(() => {
+    if (busy) {
+      return
+    }
+
+    loadFileFromPath(null)
+  }, [busy, loadFileFromPath])
+
   const panelStyle = useMemo(
     () => ({
       ...basePanelStyle,
@@ -539,9 +575,8 @@ function App() {
       return
     }
 
-    // Zavolej onDrop se souborem - on již handluje setBusy a loading
-    onDrop([droppedFile], [], event)
-  }, [busy, onDrop])
+    loadFileFromPath(filePath)
+  }, [busy, loadFileFromPath])
 
   const isZipLikeMeta = meta?.kind === 'zip' || meta?.kind === 'folder'
 
@@ -727,6 +762,15 @@ function App() {
         {!meta && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12 }}>
             <div
+              role='button'
+              tabIndex={0}
+              onClick={onFilePanelClick}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  onFilePanelClick()
+                }
+              }}
               onDragEnter={onFileDragEnter}
               onDragOver={onFileDragOver}
               onDragLeave={onFileDragLeave}
