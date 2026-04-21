@@ -1,6 +1,5 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useDropzone } from 'react-dropzone'
 import packageJson from '../package.json'
 
 const basePanelStyle = {
@@ -186,6 +185,7 @@ function App() {
   const [saveBusy, setSaveBusy] = useState(false)
   const [exportBusy, setExportBusy] = useState(false)
   const [isFolderDragActive, setIsFolderDragActive] = useState(false)
+  const [isFileDragActive, setIsFileDragActive] = useState(false)
   const [trails, setTrails] = useState([])
   const trailIdRef = useRef(0)
   const trailTimeoutsRef = useRef([])
@@ -295,34 +295,9 @@ function App() {
   const isExportSuccessStatus = normalizedStatus.startsWith('manifest byl vyexportován do ')
   const isValidationFailureStatus = normalizedStatus.startsWith('validace json selhala: ')
 
-  const resolveDropFilePath = useCallback((files, event) => {
-    const [file] = files || []
-    const directPath = file?.path || file?.filepath
-    if (typeof directPath === 'string' && directPath.trim()) {
-      return directPath
-    }
-
-    const bridgePath = window.api?.getPathForFile?.(file)
-    if (typeof bridgePath === 'string' && bridgePath.trim()) {
-      return bridgePath
-    }
-
-    const transferred = event?.dataTransfer?.files?.[0]
-    const transferPath = transferred?.path || transferred?.filepath
-    if (typeof transferPath === 'string' && transferPath.trim()) {
-      return transferPath
-    }
-
-    const transferBridgePath = window.api?.getPathForFile?.(transferred)
-    if (typeof transferBridgePath === 'string' && transferBridgePath.trim()) {
-      return transferBridgePath
-    }
-
-    return null
-  }, [])
-
   const onDrop = useCallback(async (files, rejections, event) => {
     setError('')
+    setIsFileDragActive(false)
 
     if (!files?.length) {
       if (rejections?.length) {
@@ -335,10 +310,17 @@ function App() {
       return
     }
 
-    let filePath = resolveDropFilePath(files, event)
-    const isDropEvent = event?.type === 'drop'
+    let filePath = null
+    const [file] = files || []
 
-    if (!filePath && isDropEvent) {
+    // V Electronu mají File objekty vlastnost 'path' nebo můžeme použít webUtils
+    if (file?.path) {
+      filePath = file.path
+    } else if (typeof window.api?.getPathForFile === 'function') {
+      filePath = window.api.getPathForFile(file)
+    }
+
+    if (!filePath) {
       setStatus('Soubor nebyl načten.')
       setError('Při přetažení se nepodařilo zjistit cestu k souboru. Zkuste přetáhnout z Průzkumníka znovu.')
       return
@@ -346,15 +328,6 @@ function App() {
 
     setBusy(true)
     try {
-      if (!filePath) {
-        filePath = await window.api.pickManifestFile()
-      }
-
-      if (!filePath) {
-        setStatus('Soubor nebyl vybrán.')
-        return
-      }
-
       const loaded = await window.api.loadManifestFile(filePath)
       setMeta(loaded)
       setEditorText(loaded.editorText)
@@ -367,27 +340,15 @@ function App() {
     } finally {
       setBusy(false)
     }
-  }, [resolveDropFilePath, spawnTrails])
-
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    multiple: false,
-    accept: {
-      'application/java-archive': ['.jar'],
-      'application/x-java-archive': ['.jar'],
-      'application/zip': ['.zip'],
-      'application/x-zip-compressed': ['.zip'],
-      'application/octet-stream': ['.jar', '.zip']
-    }
-  })
+  }, [spawnTrails])
 
   const panelStyle = useMemo(
     () => ({
       ...basePanelStyle,
-      borderColor: isDragActive ? theme.panelBorderActive : theme.panelBorder,
-      background: isDragActive ? theme.panelBgActive : theme.panelBg
+      borderColor: isFileDragActive ? theme.panelBorderActive : theme.panelBorder,
+      background: isFileDragActive ? theme.panelBgActive : theme.panelBg
     }),
-    [isDragActive, theme]
+    [isFileDragActive, theme]
   )
 
   const folderPanelStyle = useMemo(
@@ -491,16 +452,96 @@ function App() {
       return
     }
 
-    const droppedPath = resolveDropFilePath(Array.from(event?.dataTransfer?.files || []), event)
-    if (!droppedPath) {
+    const dataTransferFiles = event?.dataTransfer?.files
+    if (!dataTransferFiles?.length) {
+      setStatus('Složka nebyla načtena.')
+      setError('Při přetažení se nepodařilo zjistit cestu ke složce.')
+      setIsFolderDragActive(false)
+      return
+    }
+
+    const droppedFolder = dataTransferFiles[0]
+    let folderPath = null
+
+    // V Electronu mají DataTransferFile objekty vlastnost 'path'
+    if (droppedFolder?.path) {
+      folderPath = droppedFolder.path
+    }
+
+    // Zkusit electron webUtils fallback
+    if (!folderPath && typeof window.api?.getPathForFile === 'function') {
+      folderPath = window.api.getPathForFile(droppedFolder)
+    }
+
+    if (!folderPath) {
       setStatus('Složka nebyla načtena.')
       setError('Při přetažení se nepodařilo zjistit cestu ke složce. Zkuste přetáhnout z Průzkumníka znovu.')
       setIsFolderDragActive(false)
       return
     }
 
-    loadFolderFromPath(droppedPath)
-  }, [busy, loadFolderFromPath, resolveDropFilePath])
+    loadFolderFromPath(folderPath)
+  }, [busy, loadFolderFromPath])
+
+  const onFileDragEnter = useCallback((event) => {
+    event.preventDefault()
+    if (!busy) {
+      setIsFileDragActive(true)
+    }
+  }, [busy])
+
+  const onFileDragOver = useCallback((event) => {
+    event.preventDefault()
+    if (!busy) {
+      setIsFileDragActive(true)
+    }
+  }, [busy])
+
+  const onFileDragLeave = useCallback((event) => {
+    event.preventDefault()
+    const nextTarget = event.relatedTarget
+    if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
+      setIsFileDragActive(false)
+    }
+  }, [])
+
+  const onFileDrop = useCallback((event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setIsFileDragActive(false)
+
+    if (busy) {
+      return
+    }
+
+    const dataTransferFiles = event?.dataTransfer?.files
+    if (!dataTransferFiles?.length) {
+      return
+    }
+
+    // V Electronu mají DataTransferFile objekty vlastnost 'path'
+    const droppedFile = dataTransferFiles[0]
+    let filePath = null
+
+    // Zkusit přímý přístup k path vlastnosti
+    if (droppedFile?.path) {
+      filePath = droppedFile.path
+    }
+
+    // Zkusit electron webUtils fallback
+    if (!filePath && typeof window.api?.getPathForFile === 'function') {
+      filePath = window.api.getPathForFile(droppedFile)
+    }
+
+    if (!filePath) {
+      setStatus('Soubor nebyl načten.')
+      setError('Při přetažení se nepodařilo zjistit cestu k souboru. Zkuste přetáhnout z Průzkumníka znovu.')
+      return
+    }
+
+    // Zavolej onDrop se souborem - on již handluje setBusy a loading
+    onDrop([droppedFile], [], event)
+  }, [busy, onDrop])
 
   const isZipLikeMeta = meta?.kind === 'zip' || meta?.kind === 'folder'
 
@@ -685,8 +726,13 @@ function App() {
         {/* <h1 style={{ marginTop: 0 }}>JAR Manifest Editor</h1> */}
         {!meta && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12 }}>
-            <div {...getRootProps()} style={panelStyle}>
-              <input {...getInputProps()} />
+            <div
+              onDragEnter={onFileDragEnter}
+              onDragOver={onFileDragOver}
+              onDragLeave={onFileDragLeave}
+              onDrop={onFileDrop}
+              style={panelStyle}
+            >
               <p style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Vyberte soubor (JAR, ZIP)</p>
             </div>
 

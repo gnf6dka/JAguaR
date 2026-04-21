@@ -8,7 +8,7 @@ const http = require('http')
 const isDev = process.env.NODE_ENV === 'development'
 let mainWindow = null
 let currentThemeMode = 'dark'
-const appIconPath = path.join(__dirname, '..', 'jaguar.png')
+const appIconPath = path.join(__dirname, '..', 'jaguar.ico')
 
 function setThemeMode(mode, options = {}) {
   const nextMode = mode === 'light' ? 'light' : 'dark'

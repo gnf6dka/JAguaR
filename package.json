@@ -31,7 +31,7 @@
   },
   "build": {
     "appId": "cz.gnf6dka.json-tool",
-    "productName": "JSON Tool",
+    "productName": "JAguaR",
     "directories": {
       "output": "release"
     },
@@ -39,6 +39,7 @@
       "dist/**/*",
       "electron/**/*",
       "jaguar.png",
+      "jaguar.ico",
       "package.json"
     ],
     "asar": true,
