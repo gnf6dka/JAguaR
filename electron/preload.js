@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   pickManifestFile: () => ipcRenderer.invoke('manifest:pickFile'),
   pickManifestFolder: () => ipcRenderer.invoke('manifest:pickFolder'),
+  getPathType: (targetPath) => ipcRenderer.invoke('manifest:getPathType', targetPath),
   getThemeMode: () => ipcRenderer.invoke('theme:get'),
   setThemeMode: (mode) => ipcRenderer.invoke('theme:set', mode),
   toggleThemeMode: () => ipcRenderer.invoke('theme:toggle'),

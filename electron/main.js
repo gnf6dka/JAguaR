@@ -336,6 +336,27 @@ app.whenReady().then(() => {
     return result.filePaths[0]
   })
 
+  ipcMain.handle('manifest:getPathType', async (_event, targetPath) => {
+    if (!targetPath || typeof targetPath !== 'string') {
+      throw new Error('Není zadána cesta.')
+    }
+
+    const stats = await fs.stat(targetPath).catch(() => null)
+    if (!stats) {
+      throw new Error('Zadaná cesta neexistuje.')
+    }
+
+    if (stats.isDirectory()) {
+      return 'directory'
+    }
+
+    if (stats.isFile()) {
+      return 'file'
+    }
+
+    return 'other'
+  })
+
   ipcMain.handle('manifest:load', async (_event, filePath) => {
     if (!filePath || typeof filePath !== 'string') {
       throw new Error('Není zadána cesta k souboru.')

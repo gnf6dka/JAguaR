@@ -35,7 +35,12 @@ const themes = {
     editorBorder: '#344566',
     buttonBg: '#2f57e5',
     buttonText: '#f6f8ff',
-    buttonBorder: '#5074f2'
+    buttonBorder: '#5074f2',
+    scrollbarTrack: 'rgba(20, 27, 40, 0.92)',
+    scrollbarThumb: 'rgba(103, 141, 255, 0.72)',
+    scrollbarThumbHover: 'rgba(145, 176, 255, 0.92)',
+    scrollbarThumbBorder: 'rgba(17, 22, 31, 0.95)',
+    scrollbarCorner: 'rgba(20, 27, 40, 0.7)'
   },
   light: {
     appBg: '#f5f7fc',
@@ -60,7 +65,12 @@ const themes = {
     editorBorder: '#c6d1f0',
     buttonBg: '#2f57e5',
     buttonText: '#f6f8ff',
-    buttonBorder: '#5074f2'
+    buttonBorder: '#5074f2',
+    scrollbarTrack: 'rgba(222, 232, 255, 0.92)',
+    scrollbarThumb: 'rgba(79, 116, 243, 0.58)',
+    scrollbarThumbHover: 'rgba(47, 87, 229, 0.82)',
+    scrollbarThumbBorder: 'rgba(245, 247, 252, 0.96)',
+    scrollbarCorner: 'rgba(222, 232, 255, 0.8)'
   }
 }
 
@@ -169,6 +179,56 @@ function TrailLayer({ trails }) {
         ))}
       </div>
     </>
+  )
+}
+
+function ScrollbarStyles({ theme }) {
+  return (
+    <style>
+      {`
+        html {
+          scrollbar-color: ${theme.scrollbarThumb} ${theme.scrollbarTrack};
+          scrollbar-width: thin;
+        }
+
+        body,
+        textarea,
+        ul,
+        div {
+          scrollbar-color: ${theme.scrollbarThumb} ${theme.scrollbarTrack};
+        }
+
+        *::-webkit-scrollbar {
+          width: 12px;
+          height: 12px;
+        }
+
+        *::-webkit-scrollbar-track {
+          background: ${theme.scrollbarTrack};
+          border-radius: 999px;
+        }
+
+        *::-webkit-scrollbar-thumb {
+          background: linear-gradient(180deg, ${theme.scrollbarThumbHover} 0%, ${theme.scrollbarThumb} 100%);
+          border: 3px solid ${theme.scrollbarThumbBorder};
+          border-radius: 999px;
+          box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+        }
+
+        *::-webkit-scrollbar-thumb:hover {
+          background: linear-gradient(180deg, ${theme.scrollbarThumbHover} 0%, ${theme.scrollbarThumbHover} 100%);
+        }
+
+        *::-webkit-scrollbar-corner {
+          background: ${theme.scrollbarCorner};
+        }
+
+        textarea,
+        ul {
+          scrollbar-gutter: stable;
+        }
+      `}
+    </style>
   )
 }
 
@@ -378,6 +438,24 @@ function App() {
     loadFileFromPath(null)
   }, [busy, loadFileFromPath])
 
+  const getDroppedPath = useCallback((event) => {
+    const dataTransferFiles = event?.dataTransfer?.files
+    if (!dataTransferFiles?.length) {
+      return null
+    }
+
+    const droppedItem = dataTransferFiles[0]
+    if (droppedItem?.path) {
+      return droppedItem.path
+    }
+
+    if (typeof window.api?.getPathForFile === 'function') {
+      return window.api.getPathForFile(droppedItem)
+    }
+
+    return null
+  }, [])
+
   const panelStyle = useMemo(
     () => ({
       ...basePanelStyle,
@@ -450,6 +528,22 @@ function App() {
     }
   }, [spawnTrails])
 
+  const loadDroppedPath = useCallback(async (droppedPath) => {
+    const pathType = await window.api.getPathType(droppedPath)
+
+    if (pathType === 'directory') {
+      await loadFolderFromPath(droppedPath)
+      return
+    }
+
+    if (pathType === 'file') {
+      await loadFileFromPath(droppedPath)
+      return
+    }
+
+    throw new Error('Přetažená položka není ani soubor, ani složka.')
+  }, [loadFileFromPath, loadFolderFromPath])
+
   const onFolderPanelClick = useCallback(() => {
     if (busy) {
       return
@@ -482,42 +576,28 @@ function App() {
   const onFolderDrop = useCallback((event) => {
     event.preventDefault()
     event.stopPropagation()
+    setIsFolderDragActive(false)
+    setIsFileDragActive(false)
 
     if (busy) {
-      setIsFolderDragActive(false)
       return
     }
 
-    const dataTransferFiles = event?.dataTransfer?.files
-    if (!dataTransferFiles?.length) {
+    const droppedPath = getDroppedPath(event)
+    if (!droppedPath) {
       setStatus('Složka nebyla načtena.')
       setError('Při přetažení se nepodařilo zjistit cestu ke složce.')
       setIsFolderDragActive(false)
       return
     }
 
-    const droppedFolder = dataTransferFiles[0]
-    let folderPath = null
-
-    // V Electronu mají DataTransferFile objekty vlastnost 'path'
-    if (droppedFolder?.path) {
-      folderPath = droppedFolder.path
-    }
-
-    // Zkusit electron webUtils fallback
-    if (!folderPath && typeof window.api?.getPathForFile === 'function') {
-      folderPath = window.api.getPathForFile(droppedFolder)
-    }
-
-    if (!folderPath) {
-      setStatus('Složka nebyla načtena.')
-      setError('Při přetažení se nepodařilo zjistit cestu ke složce. Zkuste přetáhnout z Průzkumníka znovu.')
-      setIsFolderDragActive(false)
-      return
-    }
-
-    loadFolderFromPath(folderPath)
-  }, [busy, loadFolderFromPath])
+    loadDroppedPath(droppedPath).catch((err) => {
+      setMeta(null)
+      setEditorText('')
+      setError(err?.message || 'Načtení položky selhalo.')
+      setBusy(false)
+    })
+  }, [busy, getDroppedPath, loadDroppedPath])
 
   const onFileDragEnter = useCallback((event) => {
     event.preventDefault()
@@ -545,38 +625,26 @@ function App() {
     event.preventDefault()
     event.stopPropagation()
     setIsFileDragActive(false)
+    setIsFolderDragActive(false)
 
     if (busy) {
       return
     }
 
-    const dataTransferFiles = event?.dataTransfer?.files
-    if (!dataTransferFiles?.length) {
-      return
-    }
-
-    // V Electronu mají DataTransferFile objekty vlastnost 'path'
-    const droppedFile = dataTransferFiles[0]
-    let filePath = null
-
-    // Zkusit přímý přístup k path vlastnosti
-    if (droppedFile?.path) {
-      filePath = droppedFile.path
-    }
-
-    // Zkusit electron webUtils fallback
-    if (!filePath && typeof window.api?.getPathForFile === 'function') {
-      filePath = window.api.getPathForFile(droppedFile)
-    }
-
-    if (!filePath) {
+    const droppedPath = getDroppedPath(event)
+    if (!droppedPath) {
       setStatus('Soubor nebyl načten.')
       setError('Při přetažení se nepodařilo zjistit cestu k souboru. Zkuste přetáhnout z Průzkumníka znovu.')
       return
     }
 
-    loadFileFromPath(filePath)
-  }, [busy, loadFileFromPath])
+    loadDroppedPath(droppedPath).catch((err) => {
+      setMeta(null)
+      setEditorText('')
+      setError(err?.message || 'Načtení položky selhalo.')
+      setBusy(false)
+    })
+  }, [busy, getDroppedPath, loadDroppedPath])
 
   const isZipLikeMeta = meta?.kind === 'zip' || meta?.kind === 'folder'
 
@@ -743,6 +811,7 @@ function App() {
         overflow: 'hidden'
       }}
     >
+      <ScrollbarStyles theme={theme} />
       <TrailLayer trails={trails} />
 
       <div
@@ -756,7 +825,20 @@ function App() {
         }}
       />
 
-      <div style={{ maxWidth: 980, margin: '0 auto', padding: 24, fontFamily: 'Segoe UI, sans-serif', color: theme.text, position: 'relative', zIndex: 1 }}>
+      <div
+        style={{
+          maxWidth: 980,
+          margin: '0 auto',
+          paddingRight: 24,
+          paddingBottom: 24,
+          paddingLeft: 24,
+          paddingTop: meta ? 0 : 24,
+          fontFamily: 'Segoe UI, sans-serif',
+          color: theme.text,
+          position: 'relative',
+          zIndex: 1
+        }}
+      >
         
         {/* <h1 style={{ marginTop: 0 }}>JAR Manifest Editor</h1> */}
         {!meta && (
