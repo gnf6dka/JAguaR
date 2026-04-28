@@ -1,6 +1,6 @@
 {
   "name": "electron-manifest-json-tool",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Portable JSON Tool using Electron + React + Vite",
   "author": "Jiri Kumprecht",
   "main": "electron/main.js",
