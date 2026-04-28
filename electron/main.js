@@ -156,6 +156,34 @@ function loadJarManifest(jarBufferOrPath, contextLabel) {
   }
 }
 
+function getEntryCompressionMethod(entry) {
+  return typeof entry?.header?.method === 'number' ? entry.header.method : null
+}
+
+function updateEntryPreservingCompression(zip, entryName, content, originalMethod = null) {
+  const entry = zip.getEntry(entryName)
+  if (!entry) {
+    return null
+  }
+
+  const methodToPreserve = originalMethod ?? getEntryCompressionMethod(entry)
+
+  zip.updateFile(entryName, content)
+
+  const updatedEntry = zip.getEntry(entryName)
+  if (updatedEntry) {
+    // adm-zip rewrites local headers with inline CRC/sizes and does not emit data descriptors.
+    // Clearing this flag prevents future reads from expecting a descriptor that is not there.
+    updatedEntry.header.flags_desc = false
+
+    if (typeof methodToPreserve === 'number') {
+      updatedEntry.header.method = methodToPreserve
+    }
+  }
+
+  return updatedEntry
+}
+
 function toPosixRelative(basePath, targetPath) {
   return path.relative(basePath, targetPath).split(path.sep).join('/')
 }
@@ -487,7 +515,7 @@ app.whenReady().then(() => {
         await fs.writeFile(outerManifestFilePath, syncedText, 'utf8')
       } else {
         syncedText = outerManifestText
-        innerJar.updateFile(innerManifestEntryName, Buffer.from(syncedText, 'utf8'))
+        updateEntryPreservingCompression(innerJar, innerManifestEntryName, Buffer.from(syncedText, 'utf8'))
         innerJar.writeZip(jarFilePath)
       }
 
@@ -528,11 +556,11 @@ app.whenReady().then(() => {
     let syncedText
     if (direction === 'inner-to-outer') {
       syncedText = innerManifestText
-      zip.updateFile(outerManifestEntryName, Buffer.from(syncedText, 'utf8'))
+      updateEntryPreservingCompression(zip, outerManifestEntryName, Buffer.from(syncedText, 'utf8'))
     } else {
       syncedText = outerManifestText
-      innerJar.updateFile(innerManifestEntryName, Buffer.from(syncedText, 'utf8'))
-      zip.updateFile(jarEntryName, innerJar.toBuffer())
+      updateEntryPreservingCompression(innerJar, innerManifestEntryName, Buffer.from(syncedText, 'utf8'))
+      updateEntryPreservingCompression(zip, jarEntryName, innerJar.toBuffer())
     }
 
     zip.writeZip(filePath)
@@ -564,7 +592,7 @@ app.whenReady().then(() => {
         throw new Error('V JAR nelze najít manifest pro uložení.')
       }
 
-      jar.updateFile(payload.innerManifestEntryName, manifestBuffer)
+      updateEntryPreservingCompression(jar, payload.innerManifestEntryName, manifestBuffer)
       jar.writeZip(payload.filePath)
 
       return { ok: true, normalizedText, message: 'JAR byl úspěšně uložen.' }
@@ -583,12 +611,12 @@ app.whenReady().then(() => {
         throw new Error('Ve vnitřním JAR nelze najít manifest pro uložení.')
       }
 
-      innerJar.updateFile(payload.innerManifestEntryName, manifestBuffer)
-      zip.updateFile(payload.jarEntryName, innerJar.toBuffer())
+      updateEntryPreservingCompression(innerJar, payload.innerManifestEntryName, manifestBuffer)
+      updateEntryPreservingCompression(zip, payload.jarEntryName, innerJar.toBuffer())
 
       // Při uložení ZIP drží vnější manifest synchronizovaný s editovaným vnitřním manifestem.
       if (payload.outerManifestEntryName) {
-        zip.updateFile(payload.outerManifestEntryName, manifestBuffer)
+        updateEntryPreservingCompression(zip, payload.outerManifestEntryName, manifestBuffer)
       }
 
       zip.writeZip(payload.filePath)
@@ -615,7 +643,7 @@ app.whenReady().then(() => {
         throw new Error('Ve vnitřním JAR nelze najít manifest pro uložení.')
       }
 
-      innerJar.updateFile(payload.innerManifestEntryName, manifestBuffer)
+      updateEntryPreservingCompression(innerJar, payload.innerManifestEntryName, manifestBuffer)
       innerJar.writeZip(payload.jarFilePath)
 
       if (payload.outerManifestFilePath) {
@@ -717,7 +745,7 @@ app.whenReady().then(() => {
         if (entry.isDirectory) continue
         const newBuf = replaceInBuffer(entry.getData(), entry.entryName)
         if (newBuf) {
-          jar.updateFile(entry.entryName, newBuf)
+          updateEntryPreservingCompression(jar, entry.entryName, newBuf, getEntryCompressionMethod(entry))
           if (entry.entryName === innerManifestEntryName) {
             try { newManifestText = normalizeJsonText(newBuf.toString('utf8'), 'manifest po změně verze') } catch (_e) { /* ignore */ }
           }
@@ -739,7 +767,7 @@ app.whenReady().then(() => {
         const outerEntry = zip.getEntry(outerManifestEntryName)
         if (outerEntry) {
           const newBuf = replaceInBuffer(outerEntry.getData(), outerManifestEntryName)
-          if (newBuf) zip.updateFile(outerManifestEntryName, newBuf)
+          if (newBuf) updateEntryPreservingCompression(zip, outerManifestEntryName, newBuf, getEntryCompressionMethod(outerEntry))
         }
       }
 
@@ -752,14 +780,14 @@ app.whenReady().then(() => {
         const displayName = `${jarEntryName} > ${entry.entryName}`
         const newBuf = replaceInBuffer(entry.getData(), displayName)
         if (newBuf) {
-          innerJar.updateFile(entry.entryName, newBuf)
+          updateEntryPreservingCompression(innerJar, entry.entryName, newBuf, getEntryCompressionMethod(entry))
           if (entry.entryName === innerManifestEntryName) {
             try { newManifestText = normalizeJsonText(newBuf.toString('utf8'), 'manifest po změně verze') } catch (_e) { /* ignore */ }
           }
         }
       }
 
-      zip.updateFile(jarEntryName, innerJar.toBuffer())
+      updateEntryPreservingCompression(zip, jarEntryName, innerJar.toBuffer(), getEntryCompressionMethod(jarEntry))
       zip.writeZip(filePath)
     } else if (kind === 'folder') {
       if (outerManifestFilePath) {
@@ -777,7 +805,7 @@ app.whenReady().then(() => {
         if (entry.isDirectory) continue
         const newBuf = replaceInBuffer(entry.getData(), entry.entryName)
         if (newBuf) {
-          innerJar.updateFile(entry.entryName, newBuf)
+          updateEntryPreservingCompression(innerJar, entry.entryName, newBuf, getEntryCompressionMethod(entry))
           if (entry.entryName === innerManifestEntryName) {
             try { newManifestText = normalizeJsonText(newBuf.toString('utf8'), 'manifest po změně verze') } catch (_e) { /* ignore */ }
           }
