@@ -156,6 +156,8 @@ function loadJarManifest(jarBufferOrPath, contextLabel) {
   }
 }
 
+const ZIP_METHOD_STORED = 0
+
 function getEntryCompressionMethod(entry) {
   return typeof entry?.header?.method === 'number' ? entry.header.method : null
 }
@@ -515,7 +517,7 @@ app.whenReady().then(() => {
         await fs.writeFile(outerManifestFilePath, syncedText, 'utf8')
       } else {
         syncedText = outerManifestText
-        updateEntryPreservingCompression(innerJar, innerManifestEntryName, Buffer.from(syncedText, 'utf8'))
+        updateEntryPreservingCompression(innerJar, innerManifestEntryName, Buffer.from(syncedText, 'utf8'), ZIP_METHOD_STORED)
         innerJar.writeZip(jarFilePath)
       }
 
@@ -556,10 +558,10 @@ app.whenReady().then(() => {
     let syncedText
     if (direction === 'inner-to-outer') {
       syncedText = innerManifestText
-      updateEntryPreservingCompression(zip, outerManifestEntryName, Buffer.from(syncedText, 'utf8'))
+      updateEntryPreservingCompression(zip, outerManifestEntryName, Buffer.from(syncedText, 'utf8'), ZIP_METHOD_STORED)
     } else {
       syncedText = outerManifestText
-      updateEntryPreservingCompression(innerJar, innerManifestEntryName, Buffer.from(syncedText, 'utf8'))
+      updateEntryPreservingCompression(innerJar, innerManifestEntryName, Buffer.from(syncedText, 'utf8'), ZIP_METHOD_STORED)
       updateEntryPreservingCompression(zip, jarEntryName, innerJar.toBuffer())
     }
 
@@ -592,7 +594,7 @@ app.whenReady().then(() => {
         throw new Error('V JAR nelze najít manifest pro uložení.')
       }
 
-      updateEntryPreservingCompression(jar, payload.innerManifestEntryName, manifestBuffer)
+      updateEntryPreservingCompression(jar, payload.innerManifestEntryName, manifestBuffer, ZIP_METHOD_STORED)
       jar.writeZip(payload.filePath)
 
       return { ok: true, normalizedText, message: 'JAR byl úspěšně uložen.' }
@@ -611,12 +613,12 @@ app.whenReady().then(() => {
         throw new Error('Ve vnitřním JAR nelze najít manifest pro uložení.')
       }
 
-      updateEntryPreservingCompression(innerJar, payload.innerManifestEntryName, manifestBuffer)
+      updateEntryPreservingCompression(innerJar, payload.innerManifestEntryName, manifestBuffer, ZIP_METHOD_STORED)
       updateEntryPreservingCompression(zip, payload.jarEntryName, innerJar.toBuffer())
 
       // Při uložení ZIP drží vnější manifest synchronizovaný s editovaným vnitřním manifestem.
       if (payload.outerManifestEntryName) {
-        updateEntryPreservingCompression(zip, payload.outerManifestEntryName, manifestBuffer)
+        updateEntryPreservingCompression(zip, payload.outerManifestEntryName, manifestBuffer, ZIP_METHOD_STORED)
       }
 
       zip.writeZip(payload.filePath)
@@ -643,7 +645,7 @@ app.whenReady().then(() => {
         throw new Error('Ve vnitřním JAR nelze najít manifest pro uložení.')
       }
 
-      updateEntryPreservingCompression(innerJar, payload.innerManifestEntryName, manifestBuffer)
+      updateEntryPreservingCompression(innerJar, payload.innerManifestEntryName, manifestBuffer, ZIP_METHOD_STORED)
       innerJar.writeZip(payload.jarFilePath)
 
       if (payload.outerManifestFilePath) {
