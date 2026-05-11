@@ -1162,7 +1162,7 @@ function App() {
 
       <div
         style={{
-          marginTop: 8,
+          marginTop: meta ? 8 : 20,
           padding: 8,
           paddingLeft: 12,
           paddingRight: isAtInitialState ? 12 : 44,
