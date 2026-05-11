@@ -4,16 +4,20 @@ const fs = require('fs/promises')
 const AdmZip = require('adm-zip')
 const isEqual = require('lodash/isEqual')
 const http = require('http')
+const Store = require('electron-store')
+
+const store = new Store({ name: 'jaguar-prefs' })
 
 const isDev = process.env.NODE_ENV === 'development'
 let mainWindow = null
-let currentThemeMode = 'dark'
+let currentThemeMode = store.get('themeMode', 'dark') === 'light' ? 'light' : 'dark'
 const appIconPath = path.join(__dirname, '..', 'jaguar.ico')
 
 function setThemeMode(mode, options = {}) {
   const nextMode = mode === 'light' ? 'light' : 'dark'
   const changed = currentThemeMode !== nextMode
   currentThemeMode = nextMode
+  store.set('themeMode', currentThemeMode)
 
   if (!options.skipMenuRefresh) {
     buildAppMenu()
@@ -37,7 +41,7 @@ function buildAppMenu() {
       label: 'Aplikace',
       submenu: [
         {
-          label: 'Restart',
+          label: 'Reload',
           accelerator: 'CommandOrControl+R',
           click: () => {
             if (mainWindow && !mainWindow.isDestroyed()) {

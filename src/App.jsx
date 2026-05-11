@@ -1,4 +1,5 @@
 
+import Editor from '@monaco-editor/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import packageJson from '../package.json'
 
@@ -74,6 +75,55 @@ const themes = {
   }
 }
 
+const monacoThemes = {
+  dark: {
+    base: 'vs-dark',
+    inherit: true,
+    rules: [
+      { token: 'string.key.json', foreground: '7CCFFF', fontStyle: 'bold' },
+      { token: 'string.value.json', foreground: '8FE388' },
+      { token: 'number.json', foreground: 'FFC56E' },
+      { token: 'keyword.json', foreground: 'FF9AB1', fontStyle: 'bold' },
+      { token: 'delimiter.bracket.json', foreground: 'D7E3FF' },
+      { token: 'delimiter.array.json', foreground: 'AABEFF' }
+    ],
+    colors: {
+      'editor.background': themes.dark.editorBg,
+      'editor.foreground': themes.dark.text,
+      'editorLineNumber.foreground': '#61708C',
+      'editorLineNumber.activeForeground': '#E8EDF7',
+      'editorCursor.foreground': '#7CCFFF',
+      'editor.selectionBackground': '#355FC955',
+      'editor.inactiveSelectionBackground': '#355FC933',
+      'editorGutter.background': themes.dark.editorBg,
+      'editor.foldBackground': '#355FC92A'
+    }
+  },
+  light: {
+    base: 'vs',
+    inherit: true,
+    rules: [
+      { token: 'string.key.json', foreground: '1E63D6', fontStyle: 'bold' },
+      { token: 'string.value.json', foreground: '2D7A2D' },
+      { token: 'number.json', foreground: 'C76800' },
+      { token: 'keyword.json', foreground: 'B03060', fontStyle: 'bold' },
+      { token: 'delimiter.bracket.json', foreground: '41598C' },
+      { token: 'delimiter.array.json', foreground: '5876C5' }
+    ],
+    colors: {
+      'editor.background': themes.light.editorBg,
+      'editor.foreground': themes.light.text,
+      'editorLineNumber.foreground': '#7A8AAB',
+      'editorLineNumber.activeForeground': '#12213F',
+      'editorCursor.foreground': '#1E63D6',
+      'editor.selectionBackground': '#8EB6FF55',
+      'editor.inactiveSelectionBackground': '#8EB6FF33',
+      'editorGutter.background': themes.light.editorBg,
+      'editor.foldBackground': '#8EB6FF24'
+    }
+  }
+}
+
 const trailPresets = {
   load: {
     color: 'rgba(68, 126, 255, 0.95)',
@@ -92,7 +142,7 @@ const trailPresets = {
   }
 }
 
-const initialStatusText = 'Očekáván JAR, ZIP nebo složka.'
+const initialStatusText = 'Nahrajte JAR, ZIP nebo složku.'
 const appVersion = packageJson.version
 
 function formatFlagPath(pathParts) {
@@ -244,6 +294,7 @@ function App() {
   const [busy, setBusy] = useState(false)
   const [saveBusy, setSaveBusy] = useState(false)
   const [exportBusy, setExportBusy] = useState(false)
+  const [isEditorExpanded, setIsEditorExpanded] = useState(false)
   const [isFolderDragActive, setIsFolderDragActive] = useState(false)
   const [isFileDragActive, setIsFileDragActive] = useState(false)
   const [trails, setTrails] = useState([])
@@ -255,6 +306,27 @@ function App() {
   const [versionModalStep, setVersionModalStep] = useState('closed')
   const [newVersionInput, setNewVersionInput] = useState('')
   const [versionChangeResult, setVersionChangeResult] = useState(null)
+  const [lastValidFlags, setLastValidFlags] = useState([])
+
+  const resetAppState = useCallback(() => {
+    trailTimeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId))
+    trailTimeoutsRef.current = []
+    setTrails([])
+    setMeta(null)
+    setEditorText('')
+    setStatus(initialStatusText)
+    setError('')
+    setBusy(false)
+    setSaveBusy(false)
+    setExportBusy(false)
+    setIsEditorExpanded(false)
+    setIsFolderDragActive(false)
+    setIsFileDragActive(false)
+    setLastValidFlags([])
+    setNewVersionInput('')
+    setVersionChangeResult(null)
+    setVersionModalStep('closed')
+  }, [])
 
   const spawnTrails = useCallback((kind) => {
     const preset = trailPresets[kind]
@@ -317,25 +389,31 @@ function App() {
   }, [])
 
   useEffect(() => {
-    const unsubscribe = window.api?.onAppReset?.(() => {
-      trailTimeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId))
-      trailTimeoutsRef.current = []
-      setTrails([])
-      setMeta(null)
-      setEditorText('')
-      setStatus(initialStatusText)
-      setError('')
-      setBusy(false)
-      setSaveBusy(false)
-      setExportBusy(false)
-    })
+    const unsubscribe = window.api?.onAppReset?.(resetAppState)
 
     return () => {
       if (typeof unsubscribe === 'function') {
         unsubscribe()
       }
     }
-  }, [])
+  }, [resetAppState])
+
+  useEffect(() => {
+    if (!isEditorExpanded) {
+      return undefined
+    }
+
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setIsEditorExpanded(false)
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [isEditorExpanded])
 
   useEffect(() => {
     window.localStorage.setItem('themeMode', themeMode)
@@ -354,6 +432,20 @@ function App() {
     normalizedStatus === 'vnitřní jar manifest byl úspěšně uložen.'
   const isExportSuccessStatus = normalizedStatus.startsWith('manifest byl vyexportován do ')
   const isValidationFailureStatus = normalizedStatus.startsWith('validace json selhala: ')
+  const isAtInitialState =
+    meta === null &&
+    editorText === '' &&
+    status === initialStatusText &&
+    error === '' &&
+    !busy &&
+    !saveBusy &&
+    !exportBusy &&
+    !isEditorExpanded &&
+    !isFolderDragActive &&
+    !isFileDragActive &&
+    trails.length === 0 &&
+    lastValidFlags.length === 0 &&
+    versionModalStep === 'closed'
 
   const onDrop = useCallback(async (files, rejections, event) => {
     setError('')
@@ -499,6 +591,15 @@ function App() {
 
     return collectBooleanFlags(parsedEditorState.parsed)
   }, [parsedEditorState])
+
+  useEffect(() => {
+    if (!parsedEditorState.error && booleanFlags.length > 0) {
+      setLastValidFlags(booleanFlags)
+    }
+    if (!parsedEditorState.error && booleanFlags.length === 0) {
+      setLastValidFlags([])
+    }
+  }, [booleanFlags, parsedEditorState.error])
 
   const loadFolderFromPath = useCallback(async (folderPath) => {
     setBusy(true)
@@ -679,7 +780,7 @@ function App() {
   }, [meta, spawnTrails])
 
   const onSave = useCallback(async () => {
-    if (!meta) {
+    if (!meta || busy || saveBusy) {
       return
     }
 
@@ -702,6 +803,25 @@ function App() {
       setBusy(false)
     }
   }, [editorText, meta, spawnTrails])
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+
+        if (!meta || busy || saveBusy || versionModalStep !== 'closed') {
+          return
+        }
+
+        onSave()
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [busy, meta, onSave, saveBusy, versionModalStep])
 
   const onExport = useCallback(async () => {
     if (!meta) {
@@ -801,6 +921,11 @@ function App() {
     }
   }, [meta, newVersionInput, currentManifestVersion])
 
+  const configureMonaco = useCallback((monaco) => {
+    monaco.editor.defineTheme('jaguar-dark', monacoThemes.dark)
+    monaco.editor.defineTheme('jaguar-light', monacoThemes.light)
+  }, [])
+
   return (
     <div
       style={{
@@ -813,6 +938,45 @@ function App() {
     >
       <ScrollbarStyles theme={theme} />
       <TrailLayer trails={trails} />
+
+      {isEditorExpanded && (
+        <button
+          type='button'
+          onClick={() => setIsEditorExpanded(false)}
+          title='Zmenšit editor'
+          style={{
+            position: 'fixed',
+            bottom: 16,
+            right: 16,
+            zIndex: 980,
+            padding: '10px 18px',
+            fontWeight: 300,
+            borderRadius: 10,
+            border: `1px solid ${theme.editorBorder}`,
+            background: theme.statusBg,
+            color: theme.text,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            boxShadow: themeMode === 'light'
+              ? '0 16px 36px rgba(18, 33, 63, 0.18)'
+              : '0 16px 36px rgba(0, 0, 0, 0.34)'
+          }}
+        >
+          <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2'>
+            <polyline points='9 3 9 9 3 9' />
+            <line x1='9' y1='9' x2='3' y2='3' />
+            <polyline points='15 21 15 15 21 15' />
+            <line x1='15' y1='15' x2='21' y2='21' />
+            <polyline points='21 9 15 9 15 3' />
+            <line x1='15' y1='9' x2='21' y2='3' />
+            <polyline points='3 15 9 15 9 21' />
+            <line x1='9' y1='15' x2='3' y2='21' />
+          </svg>
+          Zmenšit editor
+        </button>
+      )}
 
       <div
         style={{
@@ -860,6 +1024,7 @@ function App() {
               style={panelStyle}
             >
               <p style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Vyberte soubor (JAR, ZIP)</p>
+              <p style={{ margin: '8px 0 0 0', fontSize: 12, color: theme.mutedText }}>nebo přetáhni</p>
             </div>
 
             <div
@@ -879,44 +1044,54 @@ function App() {
               style={folderPanelStyle}
             >
               <p style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Vyberte složku</p>
+              <p style={{ margin: '8px 0 0 0', fontSize: 12, color: theme.mutedText }}>nebo přetáhni</p>
             </div>
           </div>
         )}
 
-      <div style={{ marginTop: 16, padding: 12, borderRadius: 10, background: theme.statusBg, border: `1px solid ${theme.statusBorder}` }}>
-        <strong>Stav:</strong>{' '}
-        <span
-          style={
-            isSavedSuccessStatus
-              ? { color: theme.statusSuccess, fontWeight: 700 }
-              : isExportSuccessStatus
-                ? { color: theme.statusExport, fontWeight: 700 }
-                : isValidationFailureStatus
-                    ? { color: theme.errorText, fontWeight: 700 }
-                    : undefined
-          }
-        >
-          {status}
-        </span>
-      </div>
-
-      {error && (
-        <div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: theme.errorBg, border: `1px solid ${theme.errorBorder}`, color: theme.errorText }}>
-          {error}
-        </div>
-      )}
-
       {meta && (
-        <div style={{ marginTop: 16, display: 'grid', gap: 12 }}>
+        <div style={{ marginTop: 12, display: 'grid', gap: 12 }}>
           <div style={{ fontSize: 14 }}>
-            <div><strong>{meta.kind === 'folder' ? 'Složka:' : 'Soubor:'}</strong> {meta.filePath}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 400, display: 'inline-flex', alignItems: 'center', gap: 6, lineHeight: 1.2 }}>
+                {meta.kind === 'folder'
+                  ? <span aria-hidden='true'>📁</span>
+                  : (
+                    <span
+                      aria-hidden='true'
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        minWidth: 26,
+                        height: 18,
+                        padding: '0 6px',
+                        borderRadius: 999,
+                        border: `1px solid ${theme.editorBorder}`,
+                        background: theme.editorBg,
+                        color: theme.text,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        letterSpacing: 0.4,
+                        lineHeight: 1,
+                        boxSizing: 'border-box',
+                        verticalAlign: 'middle'
+                      }}
+                    >
+                      {meta.filePath.toLowerCase().endsWith('.zip') ? 'ZIP' : 'JAR'}
+                    </span>
+                  )}
+                {meta.kind === 'folder' ? 'Složka:' : 'Soubor:'}
+              </span>
+              <span style={{ fontWeight: 300, lineHeight: 1.2 }}>{meta.filePath}</span>
+            </div>
             {/* <div><strong>Typ:</strong> {meta.kind.toUpperCase()}</div> */}
-            <div><strong>Vnitřní manifest (relativní cesta):</strong> {meta.innerManifestDisplayPath || meta.innerManifestEntryName || 'N/A'}</div>
+            <div><span style={{ fontWeight: 400 }}>📄 Vnitřní manifest:</span> <span style={{ fontWeight: 300 }}>{meta.innerManifestDisplayPath || meta.innerManifestEntryName || 'N/A'}</span></div>
             {isZipLikeMeta && (
               <div>
-                <strong>Vnější manifest (relativní cesta):</strong>{' '}
+                <span style={{ fontWeight: 400 }}>📄 Vnější manifest:</span>{' '}
                 {meta.outerManifestEntryName
-                  ? meta.outerManifestEntryName
+                  ? <span style={{ fontWeight: 300 }}>{meta.outerManifestEntryName}</span>
                   : <span style={{ color: theme.errorText, fontWeight: 700 }}>Vnější manifest nenalezen!</span>}
               </div>
             )}
@@ -982,6 +1157,79 @@ function App() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      <div
+        style={{
+          marginTop: 8,
+          padding: 8,
+          paddingLeft: 12,
+          paddingRight: isAtInitialState ? 12 : 44,
+          borderRadius: 10,
+          background: theme.statusBg,
+          border: `1px solid ${theme.statusBorder}`,
+          position: 'relative'
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <strong>Stav:</strong>{' '}
+          <span
+            style={
+              isSavedSuccessStatus
+                ? { color: theme.statusSuccess, fontWeight: 700 }
+                : isExportSuccessStatus
+                  ? { color: theme.statusExport, fontWeight: 700 }
+                  : isValidationFailureStatus
+                    ? { color: theme.errorText, fontWeight: 700 }
+                    : undefined
+            }
+          >
+            {status}
+          </span>
+        </div>
+        {!isAtInitialState && (
+          <button
+            type='button'
+            onClick={resetAppState}
+            title='Vrátit JAguaRa do výchozího stavu'
+            aria-label='Vrátit JAguaRa do výchozího stavu'
+            style={{
+              position: 'absolute',
+              top: '50%',
+              right: 10,
+              transform: 'translateY(-50%)',
+              width: 22,
+              height: 22,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: 6,
+              border: `1px solid ${theme.editorBorder}`,
+              background: theme.editorBg,
+              color: theme.text,
+              cursor: 'pointer',
+              padding: 0
+            }}
+          >
+            <svg width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round' aria-hidden='true'>
+              <polyline points='23 4 23 10 17 10' />
+              <polyline points='1 20 1 14 7 14' />
+              <path d='M3.51 9a9 9 0 0 1 14.13-3.36L23 10' />
+              <path d='M20.49 15a9 9 0 0 1-14.13 3.36L1 14' />
+            </svg>
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <div style={{ marginTop: 8, padding: 12, borderRadius: 10, background: theme.errorBg, border: `1px solid ${theme.errorBorder}`, color: theme.errorText }}>
+          {error}
+        </div>
+      )}
+
+      {meta && (
+        <div style={{ marginTop: 8, display: 'grid', gap: 8 }}>
 
           <div
             style={{
@@ -993,69 +1241,140 @@ function App() {
               gap: 10
             }}
           >
-            {/* <div style={{ fontWeight: 700 }}>Boolean flagy z manifestu</div> */}
-
-            {parsedEditorState.error && (
-              <div style={{ color: theme.errorText }}>
-                Flagy jsou dostupné až po načtení validního JSONu.
-              </div>
-            )}
-
             {!parsedEditorState.error && !booleanFlags.length && (
               <div style={{ color: theme.mutedText }}>
                 V aktuálním manifestu nejsou žádné boolean hodnoty.
               </div>
             )}
 
-            {!!booleanFlags.length && (
-              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                {booleanFlags.map((flag) => (
+            {(parsedEditorState.error ? lastValidFlags : booleanFlags).length > 0 && (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', opacity: parsedEditorState.error ? 0.45 : 1, transition: 'opacity 0.15s' }}>
+                {(parsedEditorState.error ? lastValidFlags : booleanFlags).map((flag) => (
                   <label
                     key={flag.label}
                     style={{
                       display: 'inline-flex',
                       alignItems: 'center',
-                      gap: 8,
-                      padding: '8px 12px',
+                      gap: 6,
+                      padding: '6px 10px',
                       borderRadius: 999,
                       border: `1px solid ${theme.editorBorder}`,
                       background: theme.editorBg,
                       color: theme.text,
-                      cursor: 'pointer'
+                      cursor: parsedEditorState.error ? 'not-allowed' : 'pointer'
                     }}
                   >
                     <input
                       type='checkbox'
                       checked={flag.value}
-                      onChange={() => onToggleFlag(flag.path)}
+                      disabled={!!parsedEditorState.error}
+                      onChange={() => !parsedEditorState.error && onToggleFlag(flag.path)}
                     />
-                    <span style={{ fontFamily: 'Consolas, monospace', fontSize: 13 }}>{flag.label}</span>
+                    <span style={{ fontFamily: 'Consolas, monospace', fontSize: 12, lineHeight: 1.2 }}>{flag.label}</span>
                   </label>
                 ))}
               </div>
             )}
           </div>
 
-          <textarea
-            value={editorText}
-            onChange={(e) => {
-              applyEditorChange(e.target.value)
-            }}
-            spellCheck={false}
-            style={{
+          <div
+            style={isEditorExpanded ? {
+              position: 'fixed',
+              inset: 0,
+              zIndex: 950,
+              borderRadius: 0,
+              border: 'none',
+              boxSizing: 'border-box',
+              overflow: 'hidden',
+              background: theme.editorBg
+            } : {
+              position: 'relative',
               width: '100%',
               minHeight: 380,
               borderRadius: 10,
               border: `1px solid ${theme.editorBorder}`,
-              padding: 14,
-              fontFamily: 'Consolas, monospace',
-              fontSize: 14,
-              lineHeight: 1.45,
               boxSizing: 'border-box',
-              background: theme.editorBg,
-              color: theme.text
+              overflow: 'hidden',
+              background: theme.editorBg
             }}
-          />
+          >
+            <Editor
+              beforeMount={configureMonaco}
+              language='json'
+              theme={themeMode === 'light' ? 'jaguar-light' : 'jaguar-dark'}
+              value={editorText}
+              onChange={(nextValue) => {
+                applyEditorChange(nextValue ?? '')
+              }}
+              height={isEditorExpanded ? '100vh' : '420px'}
+              options={{
+                automaticLayout: true,
+                minimap: { enabled: false },
+                glyphMargin: true,
+                folding: true,
+                foldingStrategy: 'auto',
+                showFoldingControls: 'always',
+                lineNumbersMinChars: 3,
+                scrollBeyondLastLine: false,
+                roundedSelection: true,
+                renderLineHighlight: 'all',
+                bracketPairColorization: { enabled: true },
+                guides: {
+                  bracketPairs: true,
+                  indentation: true
+                },
+                wordWrap: 'on',
+                wrappingIndent: 'indent',
+                tabSize: 2,
+                insertSpaces: true,
+                fontFamily: 'Consolas, Courier New, monospace',
+                fontSize: 14,
+                lineHeight: 22,
+                padding: {
+                  top: 14,
+                  bottom: 14
+                }
+              }}
+            />
+            {!isEditorExpanded && (
+              <button
+                type='button'
+                onClick={() => setIsEditorExpanded(true)}
+                title='Roztáhnout editor'
+                style={{
+                  position: 'absolute',
+                  bottom: 12,
+                  right: 15,
+                  zIndex: 10,
+                  padding: '10px 18px',
+                  fontWeight: 400,
+                  borderRadius: 10,
+                  border: `1px solid ${theme.editorBorder}`,
+                  background: theme.statusBg,
+                  color: theme.text,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  boxShadow: themeMode === 'light'
+                    ? '0 8px 20px rgba(18, 33, 63, 0.12)'
+                    : '0 8px 20px rgba(0, 0, 0, 0.28)'
+                }}
+              >
+                <svg width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2'>
+                  <polyline points='15 3 21 3 21 9' />
+                  <line x1='14' y1='10' x2='21' y2='3' />
+                  <polyline points='9 21 3 21 3 15' />
+                  <line x1='10' y1='14' x2='3' y2='21' />
+                  <polyline points='21 15 21 21 15 21' />
+                  <line x1='14' y1='14' x2='21' y2='21' />
+                  <polyline points='3 9 3 3 9 3' />
+                  <line x1='10' y1='10' x2='3' y2='3' />
+                </svg>
+                Roztáhnout editor
+              </button>
+            )}
+          </div>
 
           <div style={{ display: 'flex', gap: 10 }}>
             <button
@@ -1133,23 +1452,31 @@ function App() {
       )}
 
       {!meta && (
-        <p style={{ marginTop: 14, fontSize: 14, color: theme.mutedText }}>
-          Zobrazí se manifest aplikace a bude možné jej upravit, uložit, exportovat.
-        </p>
+        <div style={{ marginTop: 14, color: theme.mutedText }}>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>
+            Jaguar umí:
+          </div>
+          <ul style={{ margin: '8px 0 0 0', paddingLeft: 20, fontSize: 14, lineHeight: 1.5 }}>
+            <li>zobrazit manifest aplikace a umožnit jeho úpravu, uložení a export</li>
+            <li>provést hluboké přečíslování verze aplikace</li>
+          </ul>
+        </div>
       )}
 
-      <footer
-        style={{
-          marginTop: 24,
-          paddingTop: 12,
-          borderTop: `1px solid ${theme.statusBorder}`,
-          fontSize: 12,
-          color: theme.mutedText,
-          textAlign: 'right'
-        }}
-      >
-        Verze aplikace: {appVersion}, Dev: gnf6dka
-      </footer>
+      {!meta && (
+        <footer
+          style={{
+            marginTop: 24,
+            paddingTop: 12,
+            borderTop: `1px solid ${theme.statusBorder}`,
+            fontSize: 12,
+            color: theme.mutedText,
+            textAlign: 'right'
+          }}
+        >
+          verze: {appVersion} | dev: gnf6dka
+        </footer>
+      )}
       </div>
 
       {/* Version change modal */}
@@ -1249,7 +1576,7 @@ function App() {
                   </div>
                 )}
 
-                <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                   <button
                     onClick={() => setVersionModalStep('closed')}
                     style={{
