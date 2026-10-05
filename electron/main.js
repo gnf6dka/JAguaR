@@ -190,6 +190,81 @@ function updateEntryPreservingCompression(zip, entryName, content, originalMetho
   return updatedEntry
 }
 
+function openJarFromMeta(payload) {
+  if (payload?.kind === 'jar' && payload.filePath) {
+    const jar = new AdmZip(payload.filePath)
+    return { jar, save: () => jar.writeZip(payload.filePath) }
+  }
+
+  if (payload?.kind === 'folder' && payload.jarFilePath) {
+    const jar = new AdmZip(payload.jarFilePath)
+    return { jar, save: () => jar.writeZip(payload.jarFilePath) }
+  }
+
+  if (payload?.kind === 'zip' && payload.filePath && payload.jarEntryName) {
+    const zip = new AdmZip(payload.filePath)
+    const jarEntry = zip.getEntry(payload.jarEntryName)
+    if (!jarEntry) {
+      throw new Error('V ZIP nelze najít vnitřní JAR.')
+    }
+
+    const jar = new AdmZip(jarEntry.getData())
+    return {
+      jar,
+      save: () => {
+        updateEntryPreservingCompression(zip, payload.jarEntryName, jar.toBuffer(), getEntryCompressionMethod(jarEntry))
+        zip.writeZip(payload.filePath)
+      }
+    }
+  }
+
+  throw new Error('Nepodporovaný typ zdrojového archivu.')
+}
+
+function getSsoaDirectory(environment) {
+  if (environment === 'dev') return 'sSOA-Manifest'
+  if (environment === 'prod') return 'sSOA-Manifest-2'
+  throw new Error('Neznámé prostředí SSOA.')
+}
+
+function findSsoaManifestEntry(jar, environment) {
+  const directoryPrefix = `${getSsoaDirectory(environment)}/`.toLowerCase()
+  return jar.getEntries()
+    .filter((entry) => !entry.isDirectory && entry.entryName.toLowerCase().startsWith(directoryPrefix) && entry.entryName.toLowerCase().endsWith('.mose'))
+    .sort((left, right) => left.entryName.localeCompare(right.entryName))[0] || null
+}
+
+function getSsoaManifestInfo(jar, environment) {
+  const entry = findSsoaManifestEntry(jar, environment)
+  if (!entry) return { entryName: null, timestamp: null }
+
+  try {
+    const token = entry.getData().toString('utf8').trim()
+    const encodedHeader = token.split('.')[0]
+    const header = JSON.parse(Buffer.from(encodedHeader, 'base64url').toString('utf8'))
+    return { entryName: entry.entryName, timestamp: typeof header.ts === 'string' ? header.ts : null }
+  } catch (_error) {
+    return { entryName: entry.entryName, timestamp: null }
+  }
+}
+
+function validateSsoaToken(token) {
+  const parts = token.trim().split('.')
+  if (parts.length !== 3 || !parts[0] || !parts[1]) {
+    throw new Error('Token musí obsahovat platnou hlavičku, payload a podpis oddělené tečkami.')
+  }
+
+  try {
+    const header = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'))
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'))
+    if (!header || typeof header !== 'object' || Array.isArray(header) || !payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new Error('Header a payload musí být JSON objekty.')
+    }
+  } catch (error) {
+    throw new Error(`Neplatný SSOA token: ${error.message}`)
+  }
+}
+
 function toPosixRelative(basePath, targetPath) {
   return path.relative(basePath, targetPath).split(path.sep).join('/')
 }
@@ -488,6 +563,53 @@ app.whenReady().then(() => {
     return loadFolderManifest(folderPath)
   })
 
+  ipcMain.handle('ssoa:list', async (_event, payload) => {
+    const { jar } = openJarFromMeta(payload)
+    return {
+      dev: getSsoaManifestInfo(jar, 'dev'),
+      prod: getSsoaManifestInfo(jar, 'prod')
+    }
+  })
+
+  ipcMain.handle('ssoa:load', async (_event, payload) => {
+    const { jar } = openJarFromMeta(payload)
+    const directoryPrefix = `${getSsoaDirectory(payload.environment)}/`.toLowerCase()
+    const entryName = payload.entryName
+    if (typeof entryName !== 'string' || !entryName.toLowerCase().startsWith(directoryPrefix) || !entryName.toLowerCase().endsWith('.mose')) {
+      throw new Error('Neplatná cesta k SSOA manifestu.')
+    }
+
+    const entry = jar.getEntry(entryName)
+    if (!entry || entry.isDirectory) {
+      throw new Error('SSOA manifest v archivu nebyl nalezen.')
+    }
+
+    return { entryName, token: entry.getData().toString('utf8') }
+  })
+
+  ipcMain.handle('ssoa:save', async (_event, payload) => {
+    if (typeof payload?.token !== 'string' || !payload.token.trim()) {
+      throw new Error('SSOA token je prázdný.')
+    }
+    validateSsoaToken(payload.token)
+
+    const { jar, save } = openJarFromMeta(payload)
+    const directoryPrefix = `${getSsoaDirectory(payload.environment)}/`.toLowerCase()
+    const entryName = payload.entryName
+    if (typeof entryName !== 'string' || !entryName.toLowerCase().startsWith(directoryPrefix) || !entryName.toLowerCase().endsWith('.mose')) {
+      throw new Error('Neplatná cesta k SSOA manifestu.')
+    }
+
+    const entry = jar.getEntry(entryName)
+    if (!entry || entry.isDirectory) {
+      throw new Error('SSOA manifest v archivu nebyl nalezen.')
+    }
+
+    updateEntryPreservingCompression(jar, entryName, Buffer.from(payload.token.trim(), 'utf8'), getEntryCompressionMethod(entry))
+    save()
+    return { ok: true }
+  })
+
   ipcMain.handle('manifest:syncOuterWithInner', async (_event, payload) => {
     if (!payload || (payload.kind !== 'zip' && payload.kind !== 'folder')) {
       throw new Error('Synchronizace je dostupná pouze pro ZIP nebo složku.')
@@ -674,8 +796,12 @@ app.whenReady().then(() => {
     }
 
     const normalizedText = normalizeJsonText(payload.editorText, 'Export manifest')
-    const sourceDir = payload.sourceFilePath ? path.dirname(payload.sourceFilePath) : null
-    const defaultDir = sourceDir ? path.join(sourceDir, 'dist') : app.getPath('documents')
+    const sourceDir = payload.sourceFilePath
+      ? payload.kind === 'folder'
+        ? payload.sourceFilePath
+        : path.dirname(payload.sourceFilePath)
+      : null
+    const defaultDir = sourceDir || app.getPath('documents')
     const defaultPath = path.join(defaultDir, 'manifest.json')
 
     const result = await dialog.showSaveDialog({

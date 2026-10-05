@@ -282,6 +282,56 @@ function ScrollbarStyles({ theme }) {
   )
 }
 
+function decodeSsoaToken(token) {
+  const parts = token.trim().split('.')
+  if (parts.length !== 3 || !parts[0] || !parts[1]) {
+    return { valid: false, error: 'Token musí obsahovat header, payload a podpis oddělené tečkami.' }
+  }
+
+  try {
+    const decodePart = (part) => {
+      const base64 = part.replace(/-/g, '+').replace(/_/g, '/')
+      const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=')
+      const bytes = Uint8Array.from(atob(padded), (character) => character.charCodeAt(0))
+      return JSON.parse(new TextDecoder().decode(bytes))
+    }
+    const header = decodePart(parts[0])
+    const payload = decodePart(parts[1])
+
+    if (!header || typeof header !== 'object' || Array.isArray(header) || !payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return { valid: false, error: 'Header a payload musí být JSON objekty.' }
+    }
+
+    return { valid: true, header, payload, error: '' }
+  } catch (err) {
+    return { valid: false, error: `Neplatný token: ${err?.message || 'header nebo payload není validní JSON.'}` }
+  }
+}
+
+function JsonPreview({ value, theme, beforeMount }) {
+  return (
+    <Editor
+      height="100%"
+      language="json"
+      theme={theme}
+      value={value}
+      beforeMount={beforeMount}
+      options={{
+        readOnly: true,
+        domReadOnly: true,
+        minimap: { enabled: false },
+        lineNumbers: 'off',
+        folding: true,
+        scrollBeyondLastLine: false,
+        wordWrap: 'on',
+        fontSize: 12,
+        padding: { top: 10, bottom: 10 },
+        automaticLayout: true
+      }}
+    />
+  )
+}
+
 function App() {
   const [themeMode, setThemeMode] = useState(() => {
     const savedTheme = window.localStorage.getItem('themeMode')
@@ -298,6 +348,12 @@ function App() {
   const [isFolderDragActive, setIsFolderDragActive] = useState(false)
   const [isFileDragActive, setIsFileDragActive] = useState(false)
   const [trails, setTrails] = useState([])
+  const [ssoaEntries, setSsoaEntries] = useState({ dev: { entryName: null, timestamp: null }, prod: { entryName: null, timestamp: null } })
+  const [ssoaModal, setSsoaModal] = useState(null)
+  const [ssoaToken, setSsoaToken] = useState('')
+  const [ssoaOriginalToken, setSsoaOriginalToken] = useState('')
+  const [ssoaSaving, setSsoaSaving] = useState(false)
+  const [ssoaSaveMessage, setSsoaSaveMessage] = useState('')
   const trailIdRef = useRef(0)
   const trailTimeoutsRef = useRef([])
   const theme = themes[themeMode]
@@ -307,6 +363,17 @@ function App() {
   const [newVersionInput, setNewVersionInput] = useState('')
   const [versionChangeResult, setVersionChangeResult] = useState(null)
   const [lastValidFlags, setLastValidFlags] = useState([])
+  const decodedSsoaToken = useMemo(() => decodeSsoaToken(ssoaToken), [ssoaToken])
+  const ssoaHeaderText = decodedSsoaToken.valid ? JSON.stringify(decodedSsoaToken.header, null, 2) : ''
+  const ssoaHeaderHeight = Math.max(80, ssoaHeaderText.split('\n').length * 18 + 20)
+
+  const loadSsoaEntries = useCallback(async (loadedMeta) => {
+    try {
+      setSsoaEntries(await window.api.listSsoaManifests(loadedMeta))
+    } catch (_err) {
+      setSsoaEntries({ dev: { entryName: null, timestamp: null }, prod: { entryName: null, timestamp: null } })
+    }
+  }, [])
 
   const resetAppState = useCallback(() => {
     trailTimeoutsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId))
@@ -323,6 +390,11 @@ function App() {
     setIsFolderDragActive(false)
     setIsFileDragActive(false)
     setLastValidFlags([])
+    setSsoaEntries({ dev: { entryName: null, timestamp: null }, prod: { entryName: null, timestamp: null } })
+    setSsoaModal(null)
+    setSsoaToken('')
+    setSsoaOriginalToken('')
+    setSsoaSaveMessage('')
     setNewVersionInput('')
     setVersionChangeResult(null)
     setVersionModalStep('closed')
@@ -481,18 +553,20 @@ function App() {
     setBusy(true)
     try {
       const loaded = await window.api.loadManifestFile(filePath)
+      await loadSsoaEntries(loaded)
       setMeta(loaded)
       setEditorText(loaded.editorText)
       setStatus(loaded.message)
       spawnTrails('load')
     } catch (err) {
       setMeta(null)
+      setSsoaEntries({ dev: { entryName: null, timestamp: null }, prod: { entryName: null, timestamp: null } })
       setEditorText('')
       setError(err?.message || 'Načtení selhalo.')
     } finally {
       setBusy(false)
     }
-  }, [spawnTrails])
+  }, [loadSsoaEntries, spawnTrails])
 
   const loadFileFromPath = useCallback(async (filePath) => {
     setBusy(true)
@@ -508,19 +582,21 @@ function App() {
       }
 
       const loaded = await window.api.loadManifestFile(filePath)
+      await loadSsoaEntries(loaded)
       setMeta(loaded)
       setEditorText(loaded.editorText)
       setStatus(loaded.message)
       spawnTrails('load')
     } catch (err) {
       setMeta(null)
+      setSsoaEntries({ dev: { entryName: null, timestamp: null }, prod: { entryName: null, timestamp: null } })
       setEditorText('')
       setError(err?.message || 'Načtení selhalo.')
     } finally {
       setBusy(false)
       setIsFileDragActive(false)
     }
-  }, [spawnTrails])
+  }, [loadSsoaEntries, spawnTrails])
 
   const onFilePanelClick = useCallback(() => {
     if (busy) {
@@ -615,19 +691,21 @@ function App() {
       }
 
       const loaded = await window.api.loadManifestFolder(folderPath)
+      await loadSsoaEntries(loaded)
       setMeta(loaded)
       setEditorText(loaded.editorText)
       setStatus(loaded.message)
       spawnTrails('load')
     } catch (err) {
       setMeta(null)
+      setSsoaEntries({ dev: { entryName: null, timestamp: null }, prod: { entryName: null, timestamp: null } })
       setEditorText('')
       setError(err?.message || 'Načtení složky selhalo.')
     } finally {
       setBusy(false)
       setIsFolderDragActive(false)
     }
-  }, [spawnTrails])
+  }, [loadSsoaEntries, spawnTrails])
 
   const loadDroppedPath = useCallback(async (droppedPath) => {
     const pathType = await window.api.getPathType(droppedPath)
@@ -809,7 +887,7 @@ function App() {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
         event.preventDefault()
 
-        if (!meta || busy || saveBusy || versionModalStep !== 'closed') {
+        if (!meta || busy || saveBusy || versionModalStep !== 'closed' || ssoaModal) {
           return
         }
 
@@ -821,7 +899,7 @@ function App() {
     return () => {
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [busy, meta, onSave, saveBusy, versionModalStep])
+  }, [busy, meta, onSave, saveBusy, ssoaModal, versionModalStep])
 
   const onExport = useCallback(async () => {
     if (!meta) {
@@ -834,7 +912,8 @@ function App() {
     try {
       const result = await window.api.exportManifestFile({
         editorText,
-        sourceFilePath: meta.filePath
+        sourceFilePath: meta.filePath,
+        kind: meta.kind
       })
 
       if (result?.canceled) {
@@ -898,6 +977,52 @@ function App() {
     setVersionChangeResult(null)
     setVersionModalStep('input')
   }, [])
+
+  const onOpenSsoaModal = useCallback(async (environment) => {
+    if (!meta) return
+
+    const entryName = ssoaEntries[environment]?.entryName
+    if (!entryName) return
+
+    setError('')
+    setSsoaSaveMessage('')
+    try {
+      const result = await window.api.loadSsoaManifest({ ...meta, environment, entryName })
+      setSsoaToken(result.token)
+      setSsoaOriginalToken(result.token)
+      setSsoaModal({ environment, entryName: result.entryName })
+    } catch (err) {
+      setError(err?.message || 'Načtení SSOA manifestu selhalo.')
+    }
+  }, [meta, ssoaEntries])
+
+  const onSaveSsoaManifest = useCallback(async () => {
+    if (!meta || !ssoaModal || !decodedSsoaToken.valid || ssoaSaving) return
+
+    setSsoaSaving(true)
+    setSsoaSaveMessage('')
+    setError('')
+    try {
+      await window.api.saveSsoaManifest({
+        ...meta,
+        environment: ssoaModal.environment,
+        entryName: ssoaModal.entryName,
+        token: ssoaToken.trim()
+      })
+      setSsoaOriginalToken(ssoaToken.trim())
+      await loadSsoaEntries(meta)
+      const message = `SSOA (${ssoaModal.environment}) manifest změněn.`
+      setSsoaSaveMessage(message)
+      setStatus(message)
+      spawnTrails('save')
+    } catch (err) {
+      const message = err?.message || 'Uložení SSOA manifestu selhalo.'
+      setSsoaSaveMessage(message)
+      setError(message)
+    } finally {
+      setSsoaSaving(false)
+    }
+  }, [decodedSsoaToken.valid, loadSsoaEntries, meta, spawnTrails, ssoaModal, ssoaSaving, ssoaToken])
 
   const onConfirmVersionChange = useCallback(async () => {
     if (!meta || !newVersionInput.trim() || !currentManifestVersion) return
@@ -1376,7 +1501,7 @@ function App() {
             )}
           </div>
 
-          <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 10, flexWrap: 'wrap', justifyContent: 'flex-start' }}>
             <button
               onClick={onSave}
               disabled={busy}
@@ -1447,6 +1572,36 @@ function App() {
               </svg>
               Změnit číslo verze
             </button>
+            {(ssoaEntries.dev.entryName || ssoaEntries.prod.entryName) && (
+              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  {ssoaEntries.dev.entryName && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenSsoaModal('dev')}
+                      disabled={busy}
+                      style={{ padding: '10px 16px', fontWeight: 600, borderRadius: 8, border: '1px solid #48b9a2', background: '#173d3b', color: '#80e2ce', cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.55 : 1 }}
+                    >
+                      SSOA (dev)
+                    </button>
+                  )}
+                  {ssoaEntries.prod.entryName && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenSsoaModal('prod')}
+                      disabled={busy}
+                      style={{ padding: '10px 16px', fontWeight: 600, borderRadius: 8, border: '1px solid #e2a648', background: '#49371d', color: '#ffd28a', cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.55 : 1 }}
+                    >
+                      SSOA (prod)
+                    </button>
+                  )}
+                </div>
+                <div style={{ display: 'grid', gap: 3, color: theme.mutedText, fontSize: 12, fontFamily: 'Consolas, monospace', textAlign: 'right' }}>
+                  {ssoaEntries.dev.entryName && <div><strong style={{ color: theme.text }}>DEV</strong> {ssoaEntries.dev.timestamp || 'timestamp nenalezen'}</div>}
+                  {ssoaEntries.prod.entryName && <div><strong style={{ color: theme.text }}>PROD</strong> {ssoaEntries.prod.timestamp || 'timestamp nenalezen'}</div>}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1478,6 +1633,119 @@ function App() {
         </footer>
       )}
       </div>
+
+      {ssoaModal && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, background: 'rgba(0,0,0,0.72)' }}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !ssoaSaving) setSsoaModal(null)
+          }}
+        >
+          <style>{`
+            .ssoa-modal-body { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 14px; flex: 1; min-height: 0; }
+            .ssoa-preview-grid { display: grid; grid-template-rows: max-content minmax(0, 1fr); gap: 12px; min-height: 0; }
+            @media (max-width: 760px) {
+              .ssoa-modal-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(200px, 0.7fr) minmax(320px, 1fr); overflow-y: auto; }
+              .ssoa-preview-grid { grid-template-rows: max-content minmax(220px, 1fr); }
+            }
+          `}</style>
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ssoa-modal-title"
+            style={{ width: 'min(1380px, 96vw)', height: 'min(880px, 94vh)', minHeight: 0, display: 'flex', flexDirection: 'column', gap: 14, padding: 20, borderRadius: 12, border: `1px solid ${theme.panelBorder}`, background: theme.panelBg, color: theme.text, boxShadow: '0 18px 60px rgba(0,0,0,0.55)' }}
+          >
+            <header style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={() => setSsoaModal(null)}
+                disabled={ssoaSaving}
+                title="Zpět"
+                aria-label="Zpět"
+                style={{ width: 38, height: 38, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: `1px solid ${theme.editorBorder}`, background: theme.editorBg, color: theme.text, cursor: ssoaSaving ? 'not-allowed' : 'pointer' }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M19 12H5" /><path d="m12 19-7-7 7-7" />
+                </svg>
+              </button>
+              <div>
+                <h2 id="ssoa-modal-title" style={{ margin: 0, fontSize: 18 }}>SSOA ({ssoaModal.environment})</h2>
+                <div style={{ marginTop: 3, color: theme.mutedText, fontSize: 12, fontFamily: 'Consolas, monospace' }}>{ssoaModal.entryName}</div>
+              </div>
+            </header>
+
+            <div className="ssoa-modal-body">
+              <section style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>Token .mose</h3>
+                <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', border: `1px solid ${theme.editorBorder}`, borderRadius: 8 }}>
+                  <Editor
+                    height="100%"
+                    language="plaintext"
+                    theme={themeMode === 'dark' ? 'jaguar-dark' : 'jaguar-light'}
+                    value={ssoaToken}
+                    onChange={(value) => setSsoaToken(value ?? '')}
+                    beforeMount={configureMonaco}
+                    options={{
+                      minimap: { enabled: false },
+                      lineNumbers: 'off',
+                      wordWrap: 'on',
+                      scrollBeyondLastLine: false,
+                      fontSize: 13,
+                      padding: { top: 12, bottom: 12 },
+                      automaticLayout: true
+                    }}
+                  />
+                </div>
+                <div style={{ minHeight: 46, paddingTop: 8, fontSize: 12 }}>
+                  <div style={{ color: decodedSsoaToken.valid ? theme.statusSuccess : theme.errorText }}>
+                    {decodedSsoaToken.valid ? 'Token je syntakticky validní.' : decodedSsoaToken.error}
+                  </div>
+                  <div style={{ marginTop: 4, color: theme.mutedText }}>
+                    Změna obsahu nepřepočítá kryptografický podpis tokenu.
+                  </div>
+                </div>
+              </section>
+
+              <div className="ssoa-preview-grid">
+                <section style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                  <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>Header</h3>
+                  <div style={{ height: ssoaHeaderHeight, flexShrink: 0, overflow: 'hidden', border: `1px solid ${theme.editorBorder}`, borderRadius: 8 }}>
+                    <JsonPreview
+                      value={ssoaHeaderText}
+                      theme={themeMode === 'dark' ? 'jaguar-dark' : 'jaguar-light'}
+                      beforeMount={configureMonaco}
+                    />
+                  </div>
+                </section>
+                <section style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                  <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>Payload</h3>
+                  <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', border: `1px solid ${theme.editorBorder}`, borderRadius: 8 }}>
+                    <JsonPreview
+                      value={decodedSsoaToken.valid ? JSON.stringify(decodedSsoaToken.payload, null, 2) : ''}
+                      theme={themeMode === 'dark' ? 'jaguar-dark' : 'jaguar-light'}
+                      beforeMount={configureMonaco}
+                    />
+                  </div>
+                </section>
+              </div>
+            </div>
+
+            <footer style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', flexShrink: 0 }}>
+              <div style={{ color: ssoaSaveMessage && !ssoaSaveMessage.startsWith('SSOA') ? theme.errorText : theme.statusSuccess, fontSize: 13 }}>
+                {ssoaSaveMessage}
+              </div>
+              <button
+                type="button"
+                onClick={onSaveSsoaManifest}
+                disabled={!decodedSsoaToken.valid || ssoaToken.trim() === ssoaOriginalToken.trim() || ssoaSaving}
+                style={{ padding: '9px 18px', borderRadius: 8, border: `1px solid ${theme.buttonBorder}`, background: theme.buttonBg, color: theme.buttonText, fontWeight: 700, cursor: decodedSsoaToken.valid && ssoaToken.trim() !== ssoaOriginalToken.trim() && !ssoaSaving ? 'pointer' : 'not-allowed', opacity: decodedSsoaToken.valid && ssoaToken.trim() !== ssoaOriginalToken.trim() && !ssoaSaving ? 1 : 0.5 }}
+              >
+                {ssoaSaving ? 'Ukládám…' : 'Uložit změny'}
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
 
       {/* Version change modal */}
       {versionModalStep !== 'closed' && (
@@ -1529,6 +1797,17 @@ function App() {
                       >
                         {String(currentManifestVersion)}
                       </code>
+                      <button
+                        type="button"
+                        title="Vložit níže"
+                        aria-label="Vložit níže"
+                        onClick={() => setNewVersionInput(String(currentManifestVersion))}
+                        style={{ marginLeft: 6, width: 28, height: 26, verticalAlign: 'middle', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, border: `1px solid ${theme.editorBorder}`, background: theme.editorBg, color: theme.text, cursor: 'pointer' }}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M12 5v14" /><path d="m19 12-7 7-7-7" />
+                        </svg>
+                      </button>
                     </div>
                     <label style={{ display: 'block', marginBottom: 6, fontSize: 14, fontWeight: 600 }}>
                       Nová verze:
