@@ -361,6 +361,7 @@ function App() {
   // Version change modal: 'closed' | 'input' | 'busy' | 'result'
   const [versionModalStep, setVersionModalStep] = useState('closed')
   const [newVersionInput, setNewVersionInput] = useState('')
+  const newVersionInputRef = useRef(null)
   const [versionChangeResult, setVersionChangeResult] = useState(null)
   const [lastValidFlags, setLastValidFlags] = useState([])
   const decodedSsoaToken = useMemo(() => decodeSsoaToken(ssoaToken), [ssoaToken])
@@ -471,12 +472,16 @@ function App() {
   }, [resetAppState])
 
   useEffect(() => {
-    if (!isEditorExpanded) {
+    if (!isEditorExpanded && !ssoaModal) {
       return undefined
     }
 
     const onKeyDown = (event) => {
       if (event.key === 'Escape') {
+        if (ssoaModal) {
+          if (!ssoaSaving) setSsoaModal(null)
+          return
+        }
         setIsEditorExpanded(false)
       }
     }
@@ -485,7 +490,7 @@ function App() {
     return () => {
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [isEditorExpanded])
+  }, [isEditorExpanded, ssoaModal, ssoaSaving])
 
   useEffect(() => {
     window.localStorage.setItem('themeMode', themeMode)
@@ -990,14 +995,22 @@ function App() {
       const result = await window.api.loadSsoaManifest({ ...meta, environment, entryName })
       setSsoaToken(result.token)
       setSsoaOriginalToken(result.token)
-      setSsoaModal({ environment, entryName: result.entryName })
+      setSsoaModal({ mode: 'manifest', environment, entryName: result.entryName })
     } catch (err) {
       setError(err?.message || 'Načtení SSOA manifestu selhalo.')
     }
   }, [meta, ssoaEntries])
 
+  const onOpenSsoaDecoder = useCallback(() => {
+    setSsoaToken('')
+    setSsoaOriginalToken('')
+    setSsoaSaveMessage('')
+    setError('')
+    setSsoaModal({ mode: 'decoder', environment: 'decoder', entryName: null })
+  }, [])
+
   const onSaveSsoaManifest = useCallback(async () => {
-    if (!meta || !ssoaModal || !decodedSsoaToken.valid || ssoaSaving) return
+    if (!meta || !ssoaModal || ssoaModal.mode === 'decoder' || !decodedSsoaToken.valid || ssoaSaving) return
 
     setSsoaSaving(true)
     setSsoaSaveMessage('')
@@ -1173,8 +1186,7 @@ function App() {
             </div>
           </div>
         )}
-
-      {meta && (
+                {meta && (
         <div style={{ marginTop: 12, display: 'grid', gap: 12 }}>
           <div style={{ fontSize: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -1626,10 +1638,21 @@ function App() {
             borderTop: `1px solid ${theme.statusBorder}`,
             fontSize: 12,
             color: theme.mutedText,
-            textAlign: 'right'
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 10,
+            flexWrap: 'wrap'
           }}
         >
-          verze: {appVersion} | dev: gnf6dka
+          <button
+            type="button"
+            onClick={onOpenSsoaDecoder}
+            style={{ padding: '7px 11px', borderRadius: 7, border: `1px solid ${theme.statusBorder}`, background: theme.statusBg, color: theme.mutedText, fontWeight: 500, cursor: 'pointer' }}
+          >
+            SSOA dekóder
+          </button>
+          <span>verze: {appVersion} | dev: gnf6dka</span>
         </footer>
       )}
       </div>
@@ -1669,8 +1692,12 @@ function App() {
                 </svg>
               </button>
               <div>
-                <h2 id="ssoa-modal-title" style={{ margin: 0, fontSize: 18 }}>SSOA ({ssoaModal.environment})</h2>
-                <div style={{ marginTop: 3, color: theme.mutedText, fontSize: 12, fontFamily: 'Consolas, monospace' }}>{ssoaModal.entryName}</div>
+                <h2 id="ssoa-modal-title" style={{ margin: 0, fontSize: 18 }}>
+                  {ssoaModal.mode === 'decoder' ? 'SSOA dekóder' : `SSOA (${ssoaModal.environment})`}
+                </h2>
+                {ssoaModal.entryName && (
+                  <div style={{ marginTop: 3, color: theme.mutedText, fontSize: 12, fontFamily: 'Consolas, monospace' }}>{ssoaModal.entryName}</div>
+                )}
               </div>
             </header>
 
@@ -1685,6 +1712,9 @@ function App() {
                     value={ssoaToken}
                     onChange={(value) => setSsoaToken(value ?? '')}
                     beforeMount={configureMonaco}
+                    onMount={(editor) => {
+                      if (ssoaModal.mode === 'decoder') editor.focus()
+                    }}
                     options={{
                       minimap: { enabled: false },
                       lineNumbers: 'off',
@@ -1701,7 +1731,7 @@ function App() {
                     {decodedSsoaToken.valid ? 'Token je syntakticky validní.' : decodedSsoaToken.error}
                   </div>
                   <div style={{ marginTop: 4, color: theme.mutedText }}>
-                    Změna obsahu nepřepočítá kryptografický podpis tokenu.
+                    Vlevo můžeš nahrát token. Pravá část zobrazuje jeho dekódovaný obsah.
                   </div>
                 </div>
               </section>
@@ -1730,19 +1760,21 @@ function App() {
               </div>
             </div>
 
-            <footer style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', flexShrink: 0 }}>
-              <div style={{ color: ssoaSaveMessage && !ssoaSaveMessage.startsWith('SSOA') ? theme.errorText : theme.statusSuccess, fontSize: 13 }}>
-                {ssoaSaveMessage}
-              </div>
-              <button
-                type="button"
-                onClick={onSaveSsoaManifest}
-                disabled={!decodedSsoaToken.valid || ssoaToken.trim() === ssoaOriginalToken.trim() || ssoaSaving}
-                style={{ padding: '9px 18px', borderRadius: 8, border: `1px solid ${theme.buttonBorder}`, background: theme.buttonBg, color: theme.buttonText, fontWeight: 700, cursor: decodedSsoaToken.valid && ssoaToken.trim() !== ssoaOriginalToken.trim() && !ssoaSaving ? 'pointer' : 'not-allowed', opacity: decodedSsoaToken.valid && ssoaToken.trim() !== ssoaOriginalToken.trim() && !ssoaSaving ? 1 : 0.5 }}
-              >
-                {ssoaSaving ? 'Ukládám…' : 'Uložit změny'}
-              </button>
-            </footer>
+            {ssoaModal.mode !== 'decoder' && (
+              <footer style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', flexShrink: 0 }}>
+                <div style={{ color: ssoaSaveMessage && !ssoaSaveMessage.startsWith('SSOA') ? theme.errorText : theme.statusSuccess, fontSize: 13 }}>
+                  {ssoaSaveMessage}
+                </div>
+                <button
+                  type="button"
+                  onClick={onSaveSsoaManifest}
+                  disabled={!decodedSsoaToken.valid || ssoaToken.trim() === ssoaOriginalToken.trim() || ssoaSaving}
+                  style={{ padding: '9px 18px', borderRadius: 8, border: `1px solid ${theme.buttonBorder}`, background: theme.buttonBg, color: theme.buttonText, fontWeight: 700, cursor: decodedSsoaToken.valid && ssoaToken.trim() !== ssoaOriginalToken.trim() && !ssoaSaving ? 'pointer' : 'not-allowed', opacity: decodedSsoaToken.valid && ssoaToken.trim() !== ssoaOriginalToken.trim() && !ssoaSaving ? 1 : 0.5 }}
+                >
+                  {ssoaSaving ? 'Ukládám…' : 'Uložit změny'}
+                </button>
+              </footer>
+            )}
           </section>
         </div>
       )}
@@ -1801,7 +1833,16 @@ function App() {
                         type="button"
                         title="Vložit níže"
                         aria-label="Vložit níže"
-                        onClick={() => setNewVersionInput(String(currentManifestVersion))}
+                        onClick={() => {
+                          const versionText = String(currentManifestVersion)
+                          setNewVersionInput(versionText)
+                          window.requestAnimationFrame(() => {
+                            const input = newVersionInputRef.current
+                            if (!input) return
+                            input.focus()
+                            input.setSelectionRange(versionText.length, versionText.length)
+                          })
+                        }}
                         style={{ marginLeft: 6, width: 28, height: 26, verticalAlign: 'middle', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 6, border: `1px solid ${theme.editorBorder}`, background: theme.editorBg, color: theme.text, cursor: 'pointer' }}
                       >
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -1813,6 +1854,7 @@ function App() {
                       Nová verze:
                     </label>
                     <input
+                      ref={newVersionInputRef}
                       type="text"
                       value={newVersionInput}
                       onChange={(e) => setNewVersionInput(e.target.value)}

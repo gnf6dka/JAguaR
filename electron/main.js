@@ -190,15 +190,35 @@ function updateEntryPreservingCompression(zip, entryName, content, originalMetho
   return updatedEntry
 }
 
+function clearDescriptorFlags(zip) {
+  // adm-zip always rewrites local headers with inline CRC/sizes, so no entry (not just the
+  // one we touched) may still claim a trailing data descriptor or the next read will fail.
+  for (const entry of zip.getEntries()) {
+    if (entry.header?.flags_desc) {
+      entry.header.flags_desc = false
+    }
+  }
+}
+
+function writeZipSafely(zip, targetPath) {
+  clearDescriptorFlags(zip)
+  zip.writeZip(targetPath)
+}
+
+function toBufferSafely(zip) {
+  clearDescriptorFlags(zip)
+  return zip.toBuffer()
+}
+
 function openJarFromMeta(payload) {
   if (payload?.kind === 'jar' && payload.filePath) {
     const jar = new AdmZip(payload.filePath)
-    return { jar, save: () => jar.writeZip(payload.filePath) }
+    return { jar, save: () => writeZipSafely(jar, payload.filePath) }
   }
 
   if (payload?.kind === 'folder' && payload.jarFilePath) {
     const jar = new AdmZip(payload.jarFilePath)
-    return { jar, save: () => jar.writeZip(payload.jarFilePath) }
+    return { jar, save: () => writeZipSafely(jar, payload.jarFilePath) }
   }
 
   if (payload?.kind === 'zip' && payload.filePath && payload.jarEntryName) {
@@ -212,8 +232,8 @@ function openJarFromMeta(payload) {
     return {
       jar,
       save: () => {
-        updateEntryPreservingCompression(zip, payload.jarEntryName, jar.toBuffer(), getEntryCompressionMethod(jarEntry))
-        zip.writeZip(payload.filePath)
+        updateEntryPreservingCompression(zip, payload.jarEntryName, toBufferSafely(jar), getEntryCompressionMethod(jarEntry))
+        writeZipSafely(zip, payload.filePath)
       }
     }
   }
@@ -644,7 +664,7 @@ app.whenReady().then(() => {
       } else {
         syncedText = outerManifestText
         updateEntryPreservingCompression(innerJar, innerManifestEntryName, Buffer.from(syncedText, 'utf8'), ZIP_METHOD_STORED)
-        innerJar.writeZip(jarFilePath)
+        writeZipSafely(innerJar, jarFilePath)
       }
 
       return {
@@ -688,10 +708,10 @@ app.whenReady().then(() => {
     } else {
       syncedText = outerManifestText
       updateEntryPreservingCompression(innerJar, innerManifestEntryName, Buffer.from(syncedText, 'utf8'), ZIP_METHOD_STORED)
-      updateEntryPreservingCompression(zip, jarEntryName, innerJar.toBuffer())
+      updateEntryPreservingCompression(zip, jarEntryName, toBufferSafely(innerJar))
     }
 
-    zip.writeZip(filePath)
+    writeZipSafely(zip, filePath)
 
     return {
       ok: true,
@@ -721,7 +741,7 @@ app.whenReady().then(() => {
       }
 
       updateEntryPreservingCompression(jar, payload.innerManifestEntryName, manifestBuffer, ZIP_METHOD_STORED)
-      jar.writeZip(payload.filePath)
+      writeZipSafely(jar, payload.filePath)
 
       return { ok: true, normalizedText, message: 'JAR byl úspěšně uložen.' }
     }
@@ -740,14 +760,14 @@ app.whenReady().then(() => {
       }
 
       updateEntryPreservingCompression(innerJar, payload.innerManifestEntryName, manifestBuffer, ZIP_METHOD_STORED)
-      updateEntryPreservingCompression(zip, payload.jarEntryName, innerJar.toBuffer())
+      updateEntryPreservingCompression(zip, payload.jarEntryName, toBufferSafely(innerJar))
 
       // Při uložení ZIP drží vnější manifest synchronizovaný s editovaným vnitřním manifestem.
       if (payload.outerManifestEntryName) {
         updateEntryPreservingCompression(zip, payload.outerManifestEntryName, manifestBuffer, ZIP_METHOD_STORED)
       }
 
-      zip.writeZip(payload.filePath)
+      writeZipSafely(zip, payload.filePath)
 
       const saveMessage = payload.outerManifestEntryName
         ? 'Oba manifesty byly úspěšně uloženy.'
@@ -772,7 +792,7 @@ app.whenReady().then(() => {
       }
 
       updateEntryPreservingCompression(innerJar, payload.innerManifestEntryName, manifestBuffer, ZIP_METHOD_STORED)
-      innerJar.writeZip(payload.jarFilePath)
+      writeZipSafely(innerJar, payload.jarFilePath)
 
       if (payload.outerManifestFilePath) {
         await fs.writeFile(payload.outerManifestFilePath, normalizedText, 'utf8')
@@ -883,7 +903,7 @@ app.whenReady().then(() => {
           }
         }
       }
-      jar.writeZip(filePath)
+      writeZipSafely(jar, filePath)
 
       if (!newManifestText) {
         const jar2 = new AdmZip(filePath)
@@ -919,8 +939,8 @@ app.whenReady().then(() => {
         }
       }
 
-      updateEntryPreservingCompression(zip, jarEntryName, innerJar.toBuffer(), getEntryCompressionMethod(jarEntry))
-      zip.writeZip(filePath)
+      updateEntryPreservingCompression(zip, jarEntryName, toBufferSafely(innerJar), getEntryCompressionMethod(jarEntry))
+      writeZipSafely(zip, filePath)
     } else if (kind === 'folder') {
       if (outerManifestFilePath) {
         const raw = await fs.readFile(outerManifestFilePath, 'utf8')
@@ -943,7 +963,7 @@ app.whenReady().then(() => {
           }
         }
       }
-      innerJar.writeZip(targetJarPath)
+      writeZipSafely(innerJar, targetJarPath)
     } else {
       throw new Error('Neznámý typ souboru pro změnu verze.')
     }
