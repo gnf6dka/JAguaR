@@ -944,6 +944,59 @@ function App() {
     })
   }, [busy, getDroppedPath, loadDroppedPath])
 
+  const onWindowDragEnter = useCallback((event) => {
+    if (meta || busy) {
+      return
+    }
+    event.preventDefault()
+    setIsFileDragActive(true)
+    setIsFolderDragActive(true)
+  }, [meta, busy])
+
+  const onWindowDragOver = useCallback((event) => {
+    if (meta || busy) {
+      return
+    }
+    event.preventDefault()
+    setIsFileDragActive(true)
+    setIsFolderDragActive(true)
+  }, [meta, busy])
+
+  const onWindowDragLeave = useCallback((event) => {
+    if (meta || busy) {
+      return
+    }
+    event.preventDefault()
+    const nextTarget = event.relatedTarget
+    if (!nextTarget || !event.currentTarget.contains(nextTarget)) {
+      setIsFileDragActive(false)
+      setIsFolderDragActive(false)
+    }
+  }, [meta, busy])
+
+  const onWindowDrop = useCallback((event) => {
+    if (meta || busy) {
+      return
+    }
+    event.preventDefault()
+    setIsFileDragActive(false)
+    setIsFolderDragActive(false)
+
+    const droppedPath = getDroppedPath(event)
+    if (!droppedPath) {
+      setStatus('Položka nebyla načtena.')
+      setError('Při přetažení se nepodařilo zjistit cestu k souboru nebo složce. Zkuste přetáhnout z Průzkumníka znovu.')
+      return
+    }
+
+    loadDroppedPath(droppedPath).catch((err) => {
+      setMeta(null)
+      setEditorText('')
+      setError(err?.message || 'Načtení položky selhalo.')
+      setBusy(false)
+    })
+  }, [meta, busy, getDroppedPath, loadDroppedPath])
+
   const isZipLikeMeta = meta?.kind === 'zip' || meta?.kind === 'folder'
 
   const onSync = useCallback(async (direction) => {
@@ -1238,6 +1291,10 @@ function App() {
 
   return (
     <div
+      onDragEnter={onWindowDragEnter}
+      onDragOver={onWindowDragOver}
+      onDragLeave={onWindowDragLeave}
+      onDrop={onWindowDrop}
       style={{
         minHeight: '100vh',
         background: theme.appBg,
