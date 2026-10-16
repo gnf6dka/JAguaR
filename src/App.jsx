@@ -1,6 +1,7 @@
 
 import Editor from '@monaco-editor/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import isEqual from 'lodash/isEqual'
 import packageJson from '../package.json'
 
 const basePanelStyle = {
@@ -32,6 +33,12 @@ const themes = {
     mismatchBorder: '#8b6a3a',
     mismatchTextAreaBg: '#2f2418',
     mismatchTextAreaBorder: '#8b6a3a',
+    diffAddBg: 'rgba(113, 230, 129, 0.18)',
+    diffAddBorder: '#3f8f50',
+    diffRemoveBg: 'rgba(255, 184, 203, 0.16)',
+    diffRemoveBorder: '#86415a',
+    diffChangedBg: 'rgba(255, 197, 110, 0.18)',
+    diffChangedBorder: '#8b6a3a',
     editorBg: '#141b28',
     editorBorder: '#344566',
     buttonBg: '#2f57e5',
@@ -62,6 +69,12 @@ const themes = {
     mismatchBorder: '#f3d28a',
     mismatchTextAreaBg: '#fffaf0',
     mismatchTextAreaBorder: '#d8bc78',
+    diffAddBg: 'rgba(31, 122, 31, 0.12)',
+    diffAddBorder: '#1f7a1f',
+    diffRemoveBg: 'rgba(138, 31, 31, 0.10)',
+    diffRemoveBorder: '#ffc6c6',
+    diffChangedBg: 'rgba(216, 188, 120, 0.28)',
+    diffChangedBorder: '#d8bc78',
     editorBg: '#ffffff',
     editorBorder: '#c6d1f0',
     buttonBg: '#2f57e5',
@@ -308,6 +321,93 @@ function decodeSsoaToken(token) {
   }
 }
 
+function computeLineDiffOps(aLines, bLines) {
+  const n = aLines.length
+  const m = bLines.length
+  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0))
+
+  for (let i = n - 1; i >= 0; i -= 1) {
+    for (let j = m - 1; j >= 0; j -= 1) {
+      dp[i][j] = aLines[i] === bLines[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+    }
+  }
+
+  const ops = []
+  let i = 0
+  let j = 0
+  while (i < n && j < m) {
+    if (aLines[i] === bLines[j]) {
+      ops.push({ type: 'equal', left: aLines[i], right: bLines[j] })
+      i += 1
+      j += 1
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      ops.push({ type: 'remove', left: aLines[i], right: null })
+      i += 1
+    } else {
+      ops.push({ type: 'add', left: null, right: bLines[j] })
+      j += 1
+    }
+  }
+  while (i < n) {
+    ops.push({ type: 'remove', left: aLines[i], right: null })
+    i += 1
+  }
+  while (j < m) {
+    ops.push({ type: 'add', left: null, right: bLines[j] })
+    j += 1
+  }
+  return ops
+}
+
+function buildSideBySideDiff(aLines, bLines) {
+  // DP diff is O(n*m); fall back to a positional diff for pathologically large inputs.
+  if (aLines.length * bLines.length > 2_000_000) {
+    const max = Math.max(aLines.length, bLines.length)
+    const rows = []
+    for (let i = 0; i < max; i += 1) {
+      const left = i < aLines.length ? aLines[i] : null
+      const right = i < bLines.length ? bLines[i] : null
+      if (left === right) {
+        rows.push({ type: 'equal', left, right })
+      } else {
+        rows.push({ type: left !== null && right !== null ? 'changed' : left !== null ? 'remove' : 'add', left, right })
+      }
+    }
+    return rows
+  }
+
+  const ops = computeLineDiffOps(aLines, bLines)
+  const rows = []
+  let i = 0
+  while (i < ops.length) {
+    if (ops[i].type === 'equal') {
+      rows.push(ops[i])
+      i += 1
+      continue
+    }
+
+    const removed = []
+    while (i < ops.length && ops[i].type === 'remove') {
+      removed.push(ops[i].left)
+      i += 1
+    }
+    const added = []
+    while (i < ops.length && ops[i].type === 'add') {
+      added.push(ops[i].right)
+      i += 1
+    }
+
+    const max = Math.max(removed.length, added.length)
+    for (let k = 0; k < max; k += 1) {
+      const left = k < removed.length ? removed[k] : null
+      const right = k < added.length ? added[k] : null
+      const type = left !== null && right !== null ? 'changed' : left !== null ? 'remove' : 'add'
+      rows.push({ type, left, right })
+    }
+  }
+  return rows
+}
+
 function JsonPreview({ value, theme, beforeMount }) {
   return (
     <Editor
@@ -354,6 +454,11 @@ function App() {
   const [ssoaOriginalToken, setSsoaOriginalToken] = useState('')
   const [ssoaSaving, setSsoaSaving] = useState(false)
   const [ssoaSaveMessage, setSsoaSaveMessage] = useState('')
+  const [comparatorModal, setComparatorModal] = useState(false)
+  const [comparatorLeft, setComparatorLeft] = useState(null)
+  const [comparatorRight, setComparatorRight] = useState(null)
+  const [comparatorErrors, setComparatorErrors] = useState({ left: '', right: '' })
+  const [comparatorLoading, setComparatorLoading] = useState({ left: false, right: false })
   const trailIdRef = useRef(0)
   const trailTimeoutsRef = useRef([])
   const theme = themes[themeMode]
@@ -396,6 +501,11 @@ function App() {
     setSsoaToken('')
     setSsoaOriginalToken('')
     setSsoaSaveMessage('')
+    setComparatorModal(false)
+    setComparatorLeft(null)
+    setComparatorRight(null)
+    setComparatorErrors({ left: '', right: '' })
+    setComparatorLoading({ left: false, right: false })
     setNewVersionInput('')
     setVersionChangeResult(null)
     setVersionModalStep('closed')
@@ -472,7 +582,7 @@ function App() {
   }, [resetAppState])
 
   useEffect(() => {
-    if (!isEditorExpanded && !ssoaModal) {
+    if (!isEditorExpanded && !ssoaModal && !comparatorModal) {
       return undefined
     }
 
@@ -480,6 +590,10 @@ function App() {
       if (event.key === 'Escape') {
         if (ssoaModal) {
           if (!ssoaSaving) setSsoaModal(null)
+          return
+        }
+        if (comparatorModal) {
+          setComparatorModal(false)
           return
         }
         setIsEditorExpanded(false)
@@ -490,7 +604,7 @@ function App() {
     return () => {
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [isEditorExpanded, ssoaModal, ssoaSaving])
+  }, [isEditorExpanded, ssoaModal, ssoaSaving, comparatorModal])
 
   useEffect(() => {
     window.localStorage.setItem('themeMode', themeMode)
@@ -1008,6 +1122,64 @@ function App() {
     setError('')
     setSsoaModal({ mode: 'decoder', environment: 'decoder', entryName: null })
   }, [])
+
+  const onOpenComparator = useCallback(() => {
+    setComparatorLeft(null)
+    setComparatorRight(null)
+    setComparatorErrors({ left: '', right: '' })
+    setComparatorLoading({ left: false, right: false })
+    setError('')
+    setComparatorModal(true)
+  }, [])
+
+  const onPickComparatorFile = useCallback(async (side) => {
+    setComparatorLoading((prev) => ({ ...prev, [side]: true }))
+    setComparatorErrors((prev) => ({ ...prev, [side]: '' }))
+    try {
+      const pickedPath = await window.api.pickManifestFile()
+      if (!pickedPath) {
+        return
+      }
+
+      const loaded = await window.api.loadManifestFile(pickedPath)
+      const fileName = pickedPath.split(/[\\/]/).pop()
+      let ssoaTimestamp = null
+      try {
+        const ssoaInfo = await window.api.listSsoaManifests(loaded)
+        ssoaTimestamp = ssoaInfo?.prod?.timestamp || null
+      } catch (_err) {
+        ssoaTimestamp = null
+      }
+      const nextSide = { filePath: pickedPath, fileName, text: loaded.editorText, ssoaTimestamp }
+      if (side === 'left') {
+        setComparatorLeft(nextSide)
+      } else {
+        setComparatorRight(nextSide)
+      }
+    } catch (err) {
+      setComparatorErrors((prev) => ({ ...prev, [side]: err?.message || 'Načtení selhalo.' }))
+    } finally {
+      setComparatorLoading((prev) => ({ ...prev, [side]: false }))
+    }
+  }, [])
+
+  const comparatorDiff = useMemo(() => {
+    if (!comparatorLeft || !comparatorRight) {
+      return null
+    }
+
+    let identical
+    try {
+      identical = isEqual(JSON.parse(comparatorLeft.text), JSON.parse(comparatorRight.text))
+    } catch (_err) {
+      identical = comparatorLeft.text === comparatorRight.text
+    }
+
+    const rows = buildSideBySideDiff(comparatorLeft.text.split('\n'), comparatorRight.text.split('\n'))
+    const diffCount = rows.filter((row) => row.type !== 'equal').length
+
+    return { rows, identical, diffCount }
+  }, [comparatorLeft, comparatorRight])
 
   const onSaveSsoaManifest = useCallback(async () => {
     if (!meta || !ssoaModal || ssoaModal.mode === 'decoder' || !decodedSsoaToken.valid || ssoaSaving) return
@@ -1645,13 +1817,22 @@ function App() {
             flexWrap: 'wrap'
           }}
         >
-          <button
-            type="button"
-            onClick={onOpenSsoaDecoder}
-            style={{ padding: '7px 11px', borderRadius: 7, border: `1px solid ${theme.statusBorder}`, background: theme.statusBg, color: theme.mutedText, fontWeight: 500, cursor: 'pointer' }}
-          >
-            SSOA dekóder
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={onOpenSsoaDecoder}
+              style={{ padding: '7px 11px', borderRadius: 7, border: `1px solid ${theme.statusBorder}`, background: theme.statusBg, color: theme.mutedText, fontWeight: 500, cursor: 'pointer' }}
+            >
+              SSOA dekóder
+            </button>
+            <button
+              type="button"
+              onClick={onOpenComparator}
+              style={{ padding: '7px 11px', borderRadius: 7, border: `1px solid ${theme.statusBorder}`, background: theme.statusBg, color: theme.mutedText, fontWeight: 500, cursor: 'pointer' }}
+            >
+              Porovnávač
+            </button>
+          </div>
           <span>verze: {appVersion} | dev: gnf6dka</span>
         </footer>
       )}
@@ -1774,6 +1955,130 @@ function App() {
                   {ssoaSaving ? 'Ukládám…' : 'Uložit změny'}
                 </button>
               </footer>
+            )}
+          </section>
+        </div>
+      )}
+
+      {comparatorModal && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, background: 'rgba(0,0,0,0.72)' }}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setComparatorModal(false)
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="comparator-modal-title"
+            style={{ width: 'min(1500px, 96vw)', height: 'min(900px, 94vh)', minHeight: 0, display: 'flex', flexDirection: 'column', gap: 14, padding: 20, borderRadius: 12, border: `1px solid ${theme.panelBorder}`, background: theme.panelBg, color: theme.text, boxShadow: '0 18px 60px rgba(0,0,0,0.55)' }}
+          >
+            <header style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={() => setComparatorModal(false)}
+                title="Zpět"
+                aria-label="Zpět"
+                style={{ width: 38, height: 38, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: `1px solid ${theme.editorBorder}`, background: theme.editorBg, color: theme.text, cursor: 'pointer' }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M19 12H5" /><path d="m12 19-7-7 7-7" />
+                </svg>
+              </button>
+              <h2 id="comparator-modal-title" style={{ margin: 0, fontSize: 18 }}>Porovnávač manifestů</h2>
+            </header>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, flexShrink: 0 }}>
+              {[
+                { side: 'left', data: comparatorLeft, other: comparatorRight, label: 'Aplikace 1' },
+                { side: 'right', data: comparatorRight, other: comparatorLeft, label: 'Aplikace 2' }
+              ].map(({ side, data, other, label }) => (
+                <div key={side} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '10px 14px', borderRadius: 10, border: `1px solid ${theme.editorBorder}`, background: theme.editorBg }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 12, color: theme.mutedText, fontWeight: 600 }}>{label}</div>
+                    <div style={{ fontSize: 13, fontFamily: 'Consolas, monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={data?.filePath || ''}>
+                      {data?.fileName || 'Soubor nenahrán'}
+                    </div>
+                    {data?.ssoaTimestamp && (
+                      <div
+                        style={{
+                          fontSize: 11,
+                          marginTop: 2,
+                          fontFamily: 'Consolas, monospace',
+                          color: data.ssoaTimestamp === other?.ssoaTimestamp ? theme.statusSuccess : theme.errorText
+                        }}
+                      >
+                        ssoa: {data.ssoaTimestamp}
+                      </div>
+                    )}
+                    {comparatorErrors[side] && (
+                      <div style={{ fontSize: 12, color: theme.errorText, marginTop: 2 }}>{comparatorErrors[side]}</div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onPickComparatorFile(side)}
+                    disabled={comparatorLoading[side]}
+                    style={{ padding: '8px 14px', borderRadius: 8, border: `1px solid ${theme.buttonBorder}`, background: theme.buttonBg, color: theme.buttonText, fontWeight: 600, cursor: comparatorLoading[side] ? 'not-allowed' : 'pointer', opacity: comparatorLoading[side] ? 0.6 : 1, flexShrink: 0 }}
+                  >
+                    {comparatorLoading[side] ? 'Načítám…' : data ? 'Vybrat jiný' : 'Nahrát'}
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            {comparatorDiff && (
+              <div
+                style={{
+                  flexShrink: 0,
+                  padding: '10px 14px',
+                  borderRadius: 10,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  border: `1px solid ${comparatorDiff.identical ? theme.statusSuccess : theme.mismatchBorder}`,
+                  background: comparatorDiff.identical ? 'transparent' : theme.mismatchBg,
+                  color: comparatorDiff.identical ? theme.statusSuccess : theme.text
+                }}
+              >
+                {comparatorDiff.identical ? 'Manifesty jsou shodné.' : `Manifesty se liší (odlišných řádků: ${comparatorDiff.diffCount}).`}
+              </div>
+            )}
+
+            {comparatorLeft && comparatorRight && comparatorDiff ? (
+              <div style={{ flex: 1, minHeight: 0, overflow: 'auto', border: `1px solid ${theme.editorBorder}`, borderRadius: 8, background: theme.editorBg, fontFamily: 'Consolas, monospace', fontSize: 12.5 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', position: 'sticky', top: 0, background: theme.panelBg, zIndex: 1 }}>
+                  <div style={{ padding: '6px 10px', fontWeight: 700, borderBottom: `1px solid ${theme.editorBorder}`, borderRight: `1px solid ${theme.editorBorder}`, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {comparatorLeft.fileName}
+                  </div>
+                  <div style={{ padding: '6px 10px', fontWeight: 700, borderBottom: `1px solid ${theme.editorBorder}`, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {comparatorRight.fileName}
+                  </div>
+                </div>
+                {comparatorDiff.rows.map((row, index) => {
+                  const rowBg =
+                    row.type === 'equal'
+                      ? 'transparent'
+                      : row.type === 'changed'
+                        ? theme.diffChangedBg
+                        : row.type === 'remove'
+                          ? theme.diffRemoveBg
+                          : theme.diffAddBg
+                  return (
+                    <div key={index} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
+                      <div style={{ padding: '2px 10px', whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: row.left !== null ? rowBg : 'transparent', borderRight: `1px solid ${theme.editorBorder}`, color: row.left !== null ? theme.text : theme.mutedText }}>
+                        {row.left !== null ? row.left : ''}
+                      </div>
+                      <div style={{ padding: '2px 10px', whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: row.right !== null ? rowBg : 'transparent', color: row.right !== null ? theme.text : theme.mutedText }}>
+                        {row.right !== null ? row.right : ''}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.mutedText, fontSize: 14, border: `1px dashed ${theme.editorBorder}`, borderRadius: 10, textAlign: 'center', padding: 16 }}>
+                Nahrajte obě aplikace (JAR nebo ZIP) pro zobrazení porovnání manifestů.
+              </div>
             )}
           </section>
         </div>
