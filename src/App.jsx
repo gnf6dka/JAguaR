@@ -3,6 +3,7 @@ import Editor from '@monaco-editor/react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import isEqual from 'lodash/isEqual'
 import packageJson from '../package.json'
+import jaguarLogo from '../jaguar.png'
 
 const basePanelStyle = {
   borderRadius: 14,
@@ -1848,14 +1849,24 @@ function App() {
       )}
 
       {!meta && (
-        <div style={{ marginTop: 14, color: theme.mutedText }}>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>
-            Jaguar umí:
+        <div style={{ marginTop: 14, color: theme.mutedText, display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16 }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>
+              Jaguar umí:
+            </div>
+            <ul style={{ margin: '8px 0 0 0', paddingLeft: 20, fontSize: 14, lineHeight: 1.5 }}>
+              <li>zobrazit manifest aplikace a umožnit jeho úpravu, uložení a export</li>
+              <li>provést hluboké přečíslování verze aplikace</li>
+              <li>zobrazit/upravit SSOA manifest aplikace</li>
+              <li>dekódovat SSOA token</li>
+              <li>porovnat 2 aplikace (manifest a SSOA timestamp)</li>
+            </ul>
           </div>
-          <ul style={{ margin: '8px 0 0 0', paddingLeft: 20, fontSize: 14, lineHeight: 1.5 }}>
-            <li>zobrazit manifest aplikace a umožnit jeho úpravu, uložení a export</li>
-            <li>provést hluboké přečíslování verze aplikace</li>
-          </ul>
+          <img
+            src={jaguarLogo}
+            alt="JAguaR logo"
+            style={{ width: 96, height: 96, objectFit: 'contain', transform: 'scaleX(-1)', flexShrink: 0, opacity: 0.2 }}
+          />
         </div>
       )}
 

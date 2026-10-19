@@ -585,9 +585,18 @@ app.whenReady().then(() => {
 
   ipcMain.handle('ssoa:list', async (_event, payload) => {
     const { jar } = openJarFromMeta(payload)
+    // každé prostředí se vyhodnocuje samostatně, aby chyba v jedné složce neschovala druhé tlačítko
+    const safeGetSsoaManifestInfo = (environment) => {
+      try {
+        return getSsoaManifestInfo(jar, environment)
+      } catch (_error) {
+        return { entryName: null, timestamp: null }
+      }
+    }
+
     return {
-      dev: getSsoaManifestInfo(jar, 'dev'),
-      prod: getSsoaManifestInfo(jar, 'prod')
+      dev: safeGetSsoaManifestInfo('dev'),
+      prod: safeGetSsoaManifestInfo('prod')
     }
   })
 
