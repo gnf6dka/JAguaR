@@ -2195,26 +2195,40 @@ function App() {
                     {comparatorRight.fileName}
                   </div>
                 </div>
-                {comparatorDiff.rows.map((row, index) => {
-                  const rowBg =
-                    row.type === 'equal'
-                      ? 'transparent'
-                      : row.type === 'changed'
-                        ? theme.diffChangedBg
-                        : row.type === 'remove'
-                          ? theme.diffRemoveBg
-                          : theme.diffAddBg
-                  return (
-                    <div key={index} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
-                      <div style={{ padding: '2px 10px', whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: row.left !== null ? rowBg : 'transparent', borderRight: `1px solid ${theme.editorBorder}`, color: row.left !== null ? theme.text : theme.mutedText }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
+                  {/* Left and right cells are grouped by column in DOM order (not interleaved per row) so
+                      dragging to select text only highlights one side, while CSS grid row placement keeps them visually aligned. */}
+                  {comparatorDiff.rows.map((row, index) => {
+                    const rowBg =
+                      row.type === 'equal'
+                        ? 'transparent'
+                        : row.type === 'changed'
+                          ? theme.diffChangedBg
+                          : row.type === 'remove'
+                            ? theme.diffRemoveBg
+                            : theme.diffAddBg
+                    return (
+                      <div key={`l-${index}`} style={{ gridColumn: 1, gridRow: index + 1, padding: '2px 10px', whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: row.left !== null ? rowBg : 'transparent', borderRight: `1px solid ${theme.editorBorder}`, color: row.left !== null ? theme.text : theme.mutedText }}>
                         {row.left !== null ? row.left : ''}
                       </div>
-                      <div style={{ padding: '2px 10px', whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: row.right !== null ? rowBg : 'transparent', color: row.right !== null ? theme.text : theme.mutedText }}>
+                    )
+                  })}
+                  {comparatorDiff.rows.map((row, index) => {
+                    const rowBg =
+                      row.type === 'equal'
+                        ? 'transparent'
+                        : row.type === 'changed'
+                          ? theme.diffChangedBg
+                          : row.type === 'remove'
+                            ? theme.diffRemoveBg
+                            : theme.diffAddBg
+                    return (
+                      <div key={`r-${index}`} style={{ gridColumn: 2, gridRow: index + 1, padding: '2px 10px', whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: row.right !== null ? rowBg : 'transparent', color: row.right !== null ? theme.text : theme.mutedText }}>
                         {row.right !== null ? row.right : ''}
                       </div>
-                    </div>
-                  )
-                })}
+                    )
+                  })}
+                </div>
               </div>
             ) : (
               <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: theme.mutedText, fontSize: 14, border: `1px dashed ${theme.editorBorder}`, borderRadius: 10, textAlign: 'center', padding: 16 }}>
