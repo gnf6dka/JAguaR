@@ -980,6 +980,61 @@ app.whenReady().then(() => {
     return { ok: true, changedFiles, newManifestText }
   })
 
+  ipcMain.handle('jar:checkVersionOccurrences', async (_event, payload) => {
+    const {
+      kind,
+      filePath,
+      jarFilePath,
+      jarEntryName,
+      innerManifestEntryName,
+      version
+    } = payload || {}
+
+    if (!version || typeof version !== 'string' || !version.trim()) {
+      throw new Error('Chybí číslo verze pro ověření konzistence.')
+    }
+
+    const trimmedVersion = version.trim()
+    const matches = []
+
+    // Manifest soubory jsou vyloučeny záměrně - hledáme výskyt verze MIMO manifest(y).
+    function scanBuffer(buf, displayName) {
+      if (buf.indexOf(0) !== -1) return // binární obsah přeskočit
+      const text = buf.toString('utf8')
+      if (text.includes(trimmedVersion)) {
+        matches.push(displayName)
+      }
+    }
+
+    if (kind === 'jar') {
+      const jar = new AdmZip(filePath)
+      for (const entry of jar.getEntries()) {
+        if (entry.isDirectory || entry.entryName === innerManifestEntryName) continue
+        scanBuffer(entry.getData(), entry.entryName)
+      }
+    } else if (kind === 'zip') {
+      const zip = new AdmZip(filePath)
+      const jarEntry = zip.getEntry(jarEntryName)
+      if (!jarEntry) throw new Error('V ZIP nelze najít JAR.')
+
+      const innerJar = new AdmZip(jarEntry.getData())
+      for (const entry of innerJar.getEntries()) {
+        if (entry.isDirectory || entry.entryName === innerManifestEntryName) continue
+        scanBuffer(entry.getData(), `${jarEntryName} > ${entry.entryName}`)
+      }
+    } else if (kind === 'folder') {
+      const innerJar = new AdmZip(jarFilePath)
+      for (const entry of innerJar.getEntries()) {
+        if (entry.isDirectory || entry.entryName === innerManifestEntryName) continue
+        scanBuffer(entry.getData(), entry.entryName)
+      }
+    } else {
+      throw new Error('Neznámý typ souboru pro ověření konzistence verze.')
+    }
+
+    return { ok: true, foundElsewhere: matches.length > 0, matches }
+  })
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

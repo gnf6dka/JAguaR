@@ -159,6 +159,10 @@ const trailPresets = {
 const initialStatusText = 'Nahrajte JAR, ZIP nebo složku.'
 const appVersion = packageJson.version
 
+const VERSION_EDIT_WARNING_TEXT = 'Pro změnu čísla verze použijte tlačítko „Změnit číslo verze“. V editoru manifestu číslo verze nikdy neměňte, jinak dojde k nekonzistenci verze napříč buildem.'
+const VERSION_INCONSISTENT_WARNING_TEXT = 'Číslo verze aplikace se zdá nekonzistentní napříč buildem, protože se vyskytuje pouze v manifestu, ale ne v žádném dalším souboru uvnitř JAR. Vyžádejte si nový build.'
+const VERSION_FIELD_KEYS = ['version', 'Version', 'appVersion']
+
 function formatFlagPath(pathParts) {
   return pathParts.reduce((label, part, index) => {
     if (typeof part === 'number') {
@@ -470,6 +474,7 @@ function App() {
   const newVersionInputRef = useRef(null)
   const [versionChangeResult, setVersionChangeResult] = useState(null)
   const [lastValidFlags, setLastValidFlags] = useState([])
+  const [versionConsistency, setVersionConsistency] = useState(null) // null | 'checking' | 'ok' | 'inconsistent'
   const decodedSsoaToken = useMemo(() => decodeSsoaToken(ssoaToken), [ssoaToken])
   const ssoaHeaderText = decodedSsoaToken.valid ? JSON.stringify(decodedSsoaToken.header, null, 2) : ''
   const ssoaHeaderHeight = Math.max(80, ssoaHeaderText.split('\n').length * 18 + 20)
@@ -479,6 +484,43 @@ function App() {
       setSsoaEntries(await window.api.listSsoaManifests(loadedMeta))
     } catch (_err) {
       setSsoaEntries({ dev: { entryName: null, timestamp: null }, prod: { entryName: null, timestamp: null } })
+    }
+  }, [])
+
+  const checkVersionConsistency = useCallback(async (loadedMeta) => {
+    if (!loadedMeta) {
+      setVersionConsistency(null)
+      return
+    }
+
+    let parsed
+    try {
+      parsed = JSON.parse(loadedMeta.editorText || '')
+    } catch (_err) {
+      setVersionConsistency(null)
+      return
+    }
+
+    const versionKey = VERSION_FIELD_KEYS.find((key) => parsed?.[key] != null)
+    const version = versionKey ? parsed[versionKey] : null
+    if (version == null || (typeof version !== 'string' && typeof version !== 'number')) {
+      setVersionConsistency(null)
+      return
+    }
+
+    setVersionConsistency('checking')
+    try {
+      const result = await window.api.checkVersionOccurrences({
+        kind: loadedMeta.kind,
+        filePath: loadedMeta.filePath,
+        jarFilePath: loadedMeta.jarFilePath,
+        jarEntryName: loadedMeta.jarEntryName,
+        innerManifestEntryName: loadedMeta.innerManifestEntryName,
+        version: String(version)
+      })
+      setVersionConsistency(result.foundElsewhere ? 'ok' : 'inconsistent')
+    } catch (_err) {
+      setVersionConsistency(null)
     }
   }, [])
 
@@ -497,6 +539,7 @@ function App() {
     setIsFolderDragActive(false)
     setIsFileDragActive(false)
     setLastValidFlags([])
+    setVersionConsistency(null)
     setSsoaEntries({ dev: { entryName: null, timestamp: null }, prod: { entryName: null, timestamp: null } })
     setSsoaModal(null)
     setSsoaToken('')
@@ -678,15 +721,17 @@ function App() {
       setEditorText(loaded.editorText)
       setStatus(loaded.message)
       spawnTrails('load')
+      checkVersionConsistency(loaded)
     } catch (err) {
       setMeta(null)
       setSsoaEntries({ dev: { entryName: null, timestamp: null }, prod: { entryName: null, timestamp: null } })
       setEditorText('')
+      setVersionConsistency(null)
       setError(err?.message || 'Načtení selhalo.')
     } finally {
       setBusy(false)
     }
-  }, [loadSsoaEntries, spawnTrails])
+  }, [loadSsoaEntries, spawnTrails, checkVersionConsistency])
 
   const loadFileFromPath = useCallback(async (filePath) => {
     setBusy(true)
@@ -707,16 +752,18 @@ function App() {
       setEditorText(loaded.editorText)
       setStatus(loaded.message)
       spawnTrails('load')
+      checkVersionConsistency(loaded)
     } catch (err) {
       setMeta(null)
       setSsoaEntries({ dev: { entryName: null, timestamp: null }, prod: { entryName: null, timestamp: null } })
       setEditorText('')
+      setVersionConsistency(null)
       setError(err?.message || 'Načtení selhalo.')
     } finally {
       setBusy(false)
       setIsFileDragActive(false)
     }
-  }, [loadSsoaEntries, spawnTrails])
+  }, [loadSsoaEntries, spawnTrails, checkVersionConsistency])
 
   const onFilePanelClick = useCallback(() => {
     if (busy) {
@@ -816,16 +863,18 @@ function App() {
       setEditorText(loaded.editorText)
       setStatus(loaded.message)
       spawnTrails('load')
+      checkVersionConsistency(loaded)
     } catch (err) {
       setMeta(null)
       setSsoaEntries({ dev: { entryName: null, timestamp: null }, prod: { entryName: null, timestamp: null } })
       setEditorText('')
+      setVersionConsistency(null)
       setError(err?.message || 'Načtení složky selhalo.')
     } finally {
       setBusy(false)
       setIsFolderDragActive(false)
     }
-  }, [loadSsoaEntries, spawnTrails])
+  }, [loadSsoaEntries, spawnTrails, checkVersionConsistency])
 
   const loadDroppedPath = useCallback(async (droppedPath) => {
     const pathType = await window.api.getPathType(droppedPath)
@@ -1047,13 +1096,14 @@ function App() {
       setStatus(result.message)
       setMeta((prev) => (prev ? { ...prev, needsSync: false } : prev))
       spawnTrails('save')
+      checkVersionConsistency({ ...meta, editorText: result.normalizedText })
     } catch (err) {
       setError(err?.message || 'Uložení selhalo.')
     } finally {
       setSaveBusy(false)
       setBusy(false)
     }
-  }, [editorText, meta, spawnTrails])
+  }, [editorText, meta, spawnTrails, checkVersionConsistency])
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -1143,6 +1193,12 @@ function App() {
     if (!parsedEditorState.isStructured) return null
     const p = parsedEditorState.parsed
     return p?.version ?? p?.Version ?? p?.appVersion ?? null
+  }, [parsedEditorState])
+
+  const versionFieldKey = useMemo(() => {
+    if (!parsedEditorState.isStructured) return null
+    const p = parsedEditorState.parsed
+    return VERSION_FIELD_KEYS.find((key) => p?.[key] != null) || null
   }, [parsedEditorState])
 
   const onOpenVersionModal = useCallback(() => {
@@ -1279,11 +1335,12 @@ function App() {
       }
       setStatus(`Verze změněna z "${currentManifestVersion}" na "${newVersionInput.trim()}".`)
       setVersionModalStep('result')
+      checkVersionConsistency({ ...meta, editorText: result.newManifestText || meta.editorText })
     } catch (err) {
       setVersionChangeResult({ changedFiles: [], error: err?.message || 'Změna verze selhala.' })
       setVersionModalStep('result')
     }
-  }, [meta, newVersionInput, currentManifestVersion])
+  }, [meta, newVersionInput, currentManifestVersion, checkVersionConsistency])
 
   const configureMonaco = useCallback((monaco) => {
     monaco.editor.defineTheme('jaguar-dark', monacoThemes.dark)
@@ -1362,7 +1419,7 @@ function App() {
           maxWidth: 980,
           margin: '0 auto',
           paddingRight: 24,
-          paddingBottom: 24,
+          paddingBottom: 4,
           paddingLeft: 24,
           paddingTop: meta ? 0 : 24,
           fontFamily: 'Segoe UI, sans-serif',
@@ -1845,6 +1902,22 @@ function App() {
               </div>
             )}
           </div>
+
+          {versionFieldKey && (
+            <div
+              style={{
+                textAlign: 'right',
+                color: versionConsistency === 'inconsistent' ? '#ff4d4f' : theme.mutedText,
+                fontSize: 13,
+                lineHeight: 1.2,
+                userSelect: 'none'
+              }}
+            >
+              <div>
+                ⚠ {versionConsistency === 'inconsistent' ? VERSION_INCONSISTENT_WARNING_TEXT : VERSION_EDIT_WARNING_TEXT}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

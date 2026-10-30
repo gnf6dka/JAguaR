@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('api', {
   saveManifestFile: (payload) => ipcRenderer.invoke('manifest:save', payload),
   exportManifestFile: (payload) => ipcRenderer.invoke('manifest:export', payload),
   changeVersion: (payload) => ipcRenderer.invoke('jar:changeVersion', payload),
+  checkVersionOccurrences: (payload) => ipcRenderer.invoke('jar:checkVersionOccurrences', payload),
   listSsoaManifests: (payload) => ipcRenderer.invoke('ssoa:list', payload),
   loadSsoaManifest: (payload) => ipcRenderer.invoke('ssoa:load', payload),
   saveSsoaManifest: (payload) => ipcRenderer.invoke('ssoa:save', payload)
